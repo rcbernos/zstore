@@ -295,8 +295,17 @@ go test -bench=BenchmarkRawFileService_CrossProvider_Comparison "-run=^$" ./test
 2. **Download**: Retrieve metadata → Download shards → Verify integrity → Reconstruct file
 3. **Delete**: Remove shards from all buckets → Delete metadata
 
+## Contributing
+
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup, running tests, and how to add new storage providers or migrations.
+
 ## Documentation
 
-- [Architecture Diagrams](docs/): PlantUML diagrams showing system architecture
+- [Architecture](docs/ARCHITECTURE.md): System architecture, package structure, key interfaces, and initialization flow
+- [Data Model](docs/DATA_MODEL.md): DynamoDB schema, ObjectMetadata/ShardStorage structs, key construction, migration system
+- [Operation Flows](docs/FLOWS.md): Step-by-step upload, download, delete, and list flows with concurrency model
+- [Contributing](docs/CONTRIBUTING.md): Developer setup, build/test/lint, adding providers and migrations
+- [IAM Permissions](docs/IAM_PERMISSIONS.md): Minimum AWS and GCP permissions with example policies
+- [Performance Improvements](docs/PERFORMANCE_IMPROVEMENTS.md): Optimization roadmap
 - [TODOs](docs/TODO.md): Development tasks and feature roadmap
 - [Git Checkpoints](docs/GIT_CHECKPOINTS.md): Stable version tags and restore instructions
