@@ -2,6 +2,54 @@
 
 A multi-provider erasure coding object storage system that distributes file shards across multiple cloud storage backends (S3, GCS) for fault tolerance and performance.
 
+## First-Time Setup & Prerequisites
+
+Follow these steps to set up your environment, credentials, cloud resources, and initialize the project.
+
+### 1. System Requirements & Build
+Ensure you have **Go (v1.18+)** installed on your system (Debian/Linux or macOS).
+
+1. Clone the repository and navigate to the project root directory.
+2. Compile the application binary:
+   ```bash
+   go build -o zstore ./cmd
+   ```
+
+---
+
+### 2. Cloud Storage Provisioning
+
+Create your cloud storage buckets before running the application:
+
+* **AWS S3 Bucket**:
+  1. Open the **AWS Management Console** and switch the active region to **Asia Pacific (Singapore) `ap-southeast-1`** in the top-right header.
+  2. Navigate to **S3** and click **Create bucket**.
+  3. Enter a unique bucket name (e.g., `my-zstore-s3-bucket`).
+  4. Keep all default settings (ACLs disabled, Block Public Access enabled) and click **Create bucket**.
+
+* **GCP Storage Bucket**:
+  1. Open the **Google Cloud Console** and navigate to **Cloud Storage** $\rightarrow$ **Buckets**.
+  2. Click **Create Bucket**.
+  3. Select **Region** as the Location Type and choose **`asia-southeast1` (Singapore)**.
+  4. Enter a unique bucket name (e.g., `my-zstore-gcs-bucket`) and create it.
+
+---
+
+### 3. Credential & Environment Setup
+
+#### GCP Service Account Key
+1. Go to **IAM & Admin** $\rightarrow$ **Service Accounts** in the GCP Console.
+    - If you don't have a service account yet, create one with the role of **Storage Object Admin**.
+2. Select your service account, navigate to the **Keys** tab, and click **Add Key** $\rightarrow$ **Create new key**.
+3. Choose **JSON** format and download the file to your machine.
+
+#### AWS Programmatic Credentials
+1. In the **AWS Access Portal**, navigate to **Accounts** and click **Access keys 🔑** next to your Account ID.
+2. Copy the active temporary export credentials under *Option 1: macOS and Linux (Bash)*.
+
+*Note: AWS sessions last for a few hours. Refresh these keys whenever a new session starts.*
+
+
 ## Quick Start
 
 ### 1. Configuration
