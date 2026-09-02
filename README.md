@@ -45,7 +45,7 @@ Create your cloud storage buckets before running the application:
 
 #### AWS Programmatic Credentials
 1. In the **AWS Access Portal**, navigate to **Accounts** and click **Access keys 🔑** next to your Account ID.
-2. Copy the active temporary export credentials under *Option 1: macOS and Linux (Bash)*.
+2. Follow the instructions for **AWS IAM Identity Center credentials (Recommended)** under *macOS and Linux (Bash)*.
 
 *Note: AWS sessions last for a few hours. Refresh these keys whenever a new session starts.*
 
@@ -91,6 +91,9 @@ export AWS_REGION=us-east-1
 # GCS credentials (for GCS buckets)
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 ```
+
+Note: use `source .env` to ensure that your shell is using the correct environment variables.
+
 
 ### 3. Initialize Database
 
