@@ -50,3 +50,6 @@ config.yaml
 
 # For GCS
 service_account.json
+
+# For working documentation
+working_docs/
