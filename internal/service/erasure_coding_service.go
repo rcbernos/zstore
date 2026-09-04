@@ -18,8 +18,9 @@
 // - Efficient reconstruction algorithm
 //
 // Usage:
-//   metadata, shards, err := ShardFile(data, 4, 2)  // 4 data + 2 parity shards
-//   reconstructed, err := ReconstructFile(shards, metadata)
+//
+//	metadata, shards, err := ShardFile(data, 4, 2)  // 4 data + 2 parity shards
+//	reconstructed, err := ReconstructFile(shards, metadata)
 //
 // The service integrates with FileService to provide distributed, fault-tolerant
 // file storage across multiple buckets and cloud providers.
@@ -35,8 +36,6 @@ import (
 	"github.com/klauspost/reedsolomon"
 	"github.com/zzenonn/zstore/internal/domain"
 )
-
-
 
 func ShardFile(data []byte, dataShards, parityShards int) (domain.ObjectMetadata, [][]byte, error) {
 	enc, err := reedsolomon.New(dataShards, parityShards)
@@ -138,8 +137,14 @@ func ReconstructFileFromFiles(shardFiles []*os.File, meta domain.ObjectMetadata)
 	return buf.Bytes(), nil
 }
 
-// ReconstructFileFromPaths reconstructs a file from shard file paths
-func ReconstructFileFromPaths(filePaths []string, meta domain.ObjectMetadata) ([]byte, error) {
+// IndexedShard pairs a downloaded shard's temporary file path with its original positional index.
+type IndexedShard struct {
+	Index int
+	Path  string
+}
+
+// ReconstructFileFromPaths reconstructs a file from shard file paths using explicit positional indices
+func ReconstructFileFromPaths(shards []IndexedShard, meta domain.ObjectMetadata) ([]byte, error) {
 	totalShards := len(meta.ShardHashes)
 	dataShards := totalShards - meta.ParityShards
 	parityShards := meta.ParityShards
@@ -149,15 +154,16 @@ func ReconstructFileFromPaths(filePaths []string, meta domain.ObjectMetadata) ([
 		return nil, err
 	}
 
-	// Create sparse array for reconstruction - only first N files are valid
+	// Create array for reconstruction using exact original shard indices
 	reconstructShards := make([][]byte, totalShards)
-	for i, path := range filePaths {
-		if i < totalShards {
-			shardData, err := os.ReadFile(path)
+	for _, shard := range shards {
+		if shard.Index >= 0 && shard.Index < totalShards {
+			shardData, err := os.ReadFile(shard.Path)
 			if err != nil {
-				return nil, fmt.Errorf("failed to read shard file %s: %w", path, err)
+				return nil, fmt.Errorf("failed to read shard file %s: %w", shard.Path, err)
 			}
-			reconstructShards[i] = shardData
+			// Slot shard data directly into its original positional index
+			reconstructShards[shard.Index] = shardData
 		}
 	}
 

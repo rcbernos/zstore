@@ -134,21 +134,21 @@ func (s *FileService) DownloadFile(ctx context.Context, key string, dest io.Writ
 
 	log.Debugf("Object Metadata: %+v\n", metadata)
 
-	// Download shards to temporary files
-	tempFilePaths, err := s.downloadShards(ctx, metadata.ShardHashes, metadata.ParityShards, quiet, verifyIntegrity)
+	// Download shards to temporary files (retaining original shard indices)
+	indexedShards, err := s.downloadShards(ctx, metadata.ShardHashes, metadata.ParityShards, quiet, verifyIntegrity)
 	if err != nil {
 		return err
 	}
 
 	// Cleanup temp files when done
 	defer func() {
-		for _, path := range tempFilePaths {
-			os.Remove(path)
+		for _, shard := range indexedShards {
+			os.Remove(shard.Path)
 		}
 	}()
 
-	// Reconstruct file from temp files
-	reconstructedData, err := ReconstructFileFromPaths(tempFilePaths, metadata)
+	// Reconstruct file from indexed temp files
+	reconstructedData, err := ReconstructFileFromPaths(indexedShards, metadata)
 	if err != nil {
 		return err
 	}
@@ -277,7 +277,7 @@ func (s *FileService) uploadShards(ctx context.Context, key string, shards [][]b
 }
 
 // downloadShards downloads shards using dynamic concurrency strategy with temp files
-func (s *FileService) downloadShards(ctx context.Context, shardHashes []domain.ShardStorage, parityShards int, quiet bool, verifyIntegrity bool) ([]string, error) {
+func (s *FileService) downloadShards(ctx context.Context, shardHashes []domain.ShardStorage, parityShards int, quiet bool, verifyIntegrity bool) ([]IndexedShard, error) {
 	// Dynamic Shard Downloading Strategy:
 	// 1. Start with limited concurrent downloads (s.concurrency)
 	// 2. When a shard completes, check if we need more shards
@@ -324,15 +324,18 @@ func (s *FileService) downloadShards(ctx context.Context, shardHashes []domain.S
 		return nil, errors.ErrInsufficientShards
 	}
 
-	// Filter out empty paths (failed downloads)
-	var successfulPaths []string
-	for _, path := range tempFilePaths {
+	// Filter out empty paths and pair each path with its original positional index
+	var successfulShardsList []IndexedShard
+	for i, path := range tempFilePaths {
 		if path != "" {
-			successfulPaths = append(successfulPaths, path)
+			successfulShardsList = append(successfulShardsList, IndexedShard{
+				Index: i,
+				Path:  path,
+			})
 		}
 	}
 
-	return successfulPaths, nil
+	return successfulShardsList, nil
 }
 
 // verifyFileIntegrity checks if the reconstructed file matches the expected CRC64 hash
@@ -493,8 +496,6 @@ func (s *FileService) maybeStartNext(wg *sync.WaitGroup, mu *sync.Mutex, tempFil
 	// If conditions not met, no new download is started, allowing
 	// the system to naturally wind down as remaining downloads complete
 }
-
-
 
 // ListFiles lists all files stored under a given prefix
 func (s *FileService) ListFiles(ctx context.Context, prefix string) ([]domain.ObjectMetadata, error) {
