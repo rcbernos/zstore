@@ -325,12 +325,14 @@ func (s *FileService) downloadShards(ctx context.Context, shardHashes []domain.S
 		return nil, errors.ErrInsufficientShards
 	}
 
-	// Filter out empty paths and pair each path with its original positional index
+	// Filter out empty paths and pair each downloaded path with its metadata shard index
 	var successfulShardsList []IndexedShard
 	for i, path := range tempFilePaths {
 		if path != "" {
+			// Retrieve explicit index from metadata record
+			shardIdx := shardHashes[i].Index
 			successfulShardsList = append(successfulShardsList, IndexedShard{
-				Index: i,
+				Index: shardIdx,
 				Path:  path,
 			})
 		}
