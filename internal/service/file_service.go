@@ -268,6 +268,7 @@ func (s *FileService) uploadShards(ctx context.Context, key string, shards [][]b
 	// Update metadata with actual storage locations
 	// This allows the download process to find shards later
 	for result := range pathCh {
+		metadata.ShardHashes[result.index].Index = result.index
 		metadata.ShardHashes[result.index].StorageType = result.storageType
 		metadata.ShardHashes[result.index].BucketName = result.bucketName
 		metadata.ShardHashes[result.index].Key = result.key
