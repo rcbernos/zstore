@@ -173,6 +173,40 @@ func (c *EqualSplitChunker) NextChunk(r io.Reader) (*Chunk, error) {
 	return chunk, nil
 }
 
+// TotalChunksEstimate returns the number of chunks that a file of the given
+// size would be split into using the current totalChunks configuration.
+//
+// This recomputes the chunk-size calculation for the provided size, so the
+// result may differ from len(chunkSizes) if the size differs from the file
+// size the chunker was originally configured with.
+//
+// For files of zero bytes, the estimate is 0.
+func (c *EqualSplitChunker) TotalChunksEstimate(size int64) int {
+	return len(calculateEqualChunkSizes(c.totalChunks, size))
+}
+
+// SetTotalChunks reconfigures the target number of chunks and recalculates
+// the chunk boundaries accordingly. The chunkIndex is reset to 0 and the
+// chunker is marked as not closed.
+//
+// Returns ErrInvalidChunkCount if total is less than or equal to 0.
+//
+// Note: SetTotalChunks does not take a fileSize parameter — it only
+// reconfigures the number of chunks. If the file size also needs updating,
+// construct a new EqualSplitChunker via NewEqualSplitChunker.
+func (c *EqualSplitChunker) SetTotalChunks(total int) error {
+	if total <= 0 {
+		return ErrInvalidChunkCount
+	}
+	c.totalChunks = total
+	c.chunkIndex = 0
+	c.closed = false
+	// Note: chunkSizes is not recalculated here because we don't have a
+	// fileSize. Callers should construct a new EqualSplitChunker with
+	// NewEqualSplitChunker if the file size also changes.
+	return nil
+}
+
 // Reset returns the EqualSplitChunker to its initial state, ready to process
 // a new file. After Reset, the next call to NextChunk will start with
 // index 0 again and re-emit the pre-calculated chunk sizes from the

@@ -64,6 +64,26 @@ type Chunker interface {
 	// a new file. After Reset, the next call to NextChunk will start
 	// with index 0 again.
 	Reset()
+
+	// TotalChunksEstimate returns the estimated number of chunks that a file
+	// of the given size (in bytes) would be split into using this chunker's
+	// current configuration. This is a pure calculation and does not require
+	// reading from a reader, making it suitable for pre-allocation of
+	// metadata structures before file processing begins.
+	//
+	// For files of zero bytes, the estimate is 0.
+	TotalChunksEstimate(size int64) int
+
+	// SetTotalChunks reconfigures the target number of chunks for chunkers
+	// that support chunk-count-based splitting (such as EqualSplitChunker).
+	// It recalculates internal chunk boundaries accordingly.
+	//
+	// For chunkers that do not support chunk-count configuration (such as
+	// FixedChunker), this method returns ErrUnsupported.
+	//
+	// After calling SetTotalChunks, Reset should be called before processing
+	// a new file.
+	SetTotalChunks(total int) error
 }
 
 // Sentinel errors for chunking operations
@@ -76,4 +96,8 @@ var (
 
 	// ErrPartialRead is returned when a partial read occurs unexpectedly.
 	ErrPartialRead = errors.New("unexpected partial read")
+
+	// ErrUnsupported is returned when an operation is not supported by the
+	// given chunker implementation.
+	ErrUnsupported = errors.New("operation not supported by this chunker")
 )

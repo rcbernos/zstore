@@ -99,3 +99,23 @@ func (c *FixedChunker) Reset() {
 func (c *FixedChunker) Close() {
 	c.closed = true
 }
+
+// TotalChunksEstimate returns the number of chunks that a file of the given
+// size would be split into using this chunker's chunk size.
+//
+// For files of zero bytes, the estimate is 0. For non-zero files, the
+// estimate is the ceiling of size / chunkSize, matching the behaviour of
+// NextChunk which returns a final (potentially partial) chunk.
+func (c *FixedChunker) TotalChunksEstimate(size int64) int {
+	if size <= 0 {
+		return 0
+	}
+	cs := int64(c.chunkSize)
+	return int((size + cs - 1) / cs)
+}
+
+// SetTotalChunks is not supported by FixedChunker, which is configured with a
+// chunk size rather than a target chunk count. It returns ErrUnsupported.
+func (c *FixedChunker) SetTotalChunks(total int) error {
+	return ErrUnsupported
+}
