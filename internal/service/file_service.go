@@ -11,6 +11,7 @@
 //
 // Key Operations:
 // - UploadFile: Shards file, distributes across buckets, stores metadata
+// - UploadFileChunked: Optional chunked upload via the chunking layer for large files
 // - DownloadFile: Retrieves shards, verifies integrity, reconstructs file
 // - DeleteFile: Removes shards from all buckets and metadata
 //
@@ -19,6 +20,7 @@
 // - Integrates with MetadataRepository for shard location tracking
 // - Implements dynamic concurrency control for optimal performance
 // - Supports configurable Reed-Solomon parameters (data/parity shards)
+// - Supports chunked uploads via the chunking layer (fixed / equal-split strategies)
 package service
 
 import (
@@ -34,6 +36,7 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/zzenonn/zstore/internal/chunking"
 	"github.com/zzenonn/zstore/internal/domain"
 	"github.com/zzenonn/zstore/internal/errors"
 	"github.com/zzenonn/zstore/internal/placement"
@@ -62,40 +65,64 @@ func NewFileService(placer placement.Placer, metadataRepo MetadataRepository) *F
 	}
 }
 
-// UploadFile uploads a file across multiple cloud storage buckets
+// Chunk method identifiers persisted on ObjectMetadata.ChunkMethod describe how
+// an object was (or was not) chunked during upload. They are intentionally kept
+// in sync with the chunkMethod accepted by UploadFileChunked.
+const (
+	// ChunkMethodNone means the object was stored as a single erasure-coded unit
+	// (the legacy, backward-compatible behaviour).
+	ChunkMethodNone = "none"
+	// ChunkMethodFixed means the object was split into fixed-size chunks before
+	// each chunk was independently erasure-coded.
+	ChunkMethodFixed = "fixed"
+	// ChunkMethodEqualSplit means the object was split into N roughly equal-sized
+	// chunks before each chunk was independently erasure-coded.
+	ChunkMethodEqualSplit = "equal-split"
+)
+
+// UploadFile uploads a file across multiple cloud storage buckets.
+//
+// This is the legacy, non-chunked entry point retained for backward
+// compatibility. It reads the whole file into memory and shards it as a single
+// unit. For memory-efficient processing of large files prefer UploadFileChunked,
+// which streams the file through the chunking layer.
 func (s *FileService) UploadFile(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int) error {
+	return s.UploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, 0, ChunkMethodNone)
+}
+
+// UploadFileChunked uploads a file with optional chunked upload support.
+//
+// When chunkMethod is ChunkMethodNone the file is read in its entirety and
+// processed as a single erasure-coded unit — identical to UploadFile. When
+// chunkMethod is ChunkMethodFixed or ChunkMethodEqualSplit the file is first
+// divided into chunks by the chunking layer and each chunk is independently
+// erasure-coded and sharded across buckets, bounding peak memory usage to
+// roughly one chunk at a time.
+//
+// chunkSize is interpreted according to chunkMethod:
+//   - ChunkMethodFixed: chunk size in bytes (each chunk is at most this big).
+//   - ChunkMethodEqualSplit: the target number of chunks (the file is divided
+//     into that many roughly equal parts).
+//   - ChunkMethodNone: chunkSize is ignored.
+//
+// For chunked uploads each chunk's shards are stored under keys of the form
+// "<prefix>/<filename>/chunk_<N>/<shardHash>" and per-chunk metadata (with the
+// populated shard locations) is recorded on ObjectMetadata.Chunks. The
+// top-level ShardHashes field is left empty for chunked objects so the download
+// path can distinguish chunked objects from legacy ones.
+func (s *FileService) UploadFileChunked(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string) error {
 	start := time.Now()
 
-	// Read file data
-	readStart := time.Now()
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-	log.Debugf("File read took: %v", time.Since(readStart))
-
-	// Check for empty file
-	if len(data) == 0 {
-		return errors.ErrEmptyFile
+	if chunkMethod == "" {
+		chunkMethod = ChunkMethodNone
 	}
 
-	// Create shards using erasure coding
-	shardStart := time.Now()
-	metadata, shards, err := ShardFile(data, dataShards, parityShards)
-	if err != nil {
-		return err
-	}
-	log.Debugf("Sharding took: %v", time.Since(shardStart))
-
-	log.Debugf("Uploading %s", key)
-
-	// Set prefix and filename for metadata
 	prefix := filepath.Dir(key)
 
-	metadata.Prefix = prefix
-	metadata.FileName = filepath.Base(key)
+	log.Debugf("Uploading %s (chunkMethod=%s)", key, chunkMethod)
 
-	// Delete prefix contents if it exists from all buckets
+	// Delete prefix contents if it exists from all buckets so stale shards from a
+	// previous upload of the same key don't linger.
 	deleteStart := time.Now()
 	buckets := s.placer.ListBuckets()
 	for _, bucketName := range buckets {
@@ -105,23 +132,200 @@ func (s *FileService) UploadFile(ctx context.Context, key string, r io.Reader, q
 	}
 	log.Debugf("Delete prefix took: %v", time.Since(deleteStart))
 
-	// Upload shards in parallel
-	uploadStart := time.Now()
-	if err := s.uploadShards(ctx, key, shards, &metadata, quiet, concurrency, parityShards); err != nil {
-		return err
+	// Build the object metadata using either the chunked or legacy code path.
+	var metadata domain.ObjectMetadata
+	switch chunkMethod {
+	case ChunkMethodNone:
+		m, uploadErr := s.uploadFileLegacy(ctx, key, r, quiet, dataShards, parityShards, concurrency)
+		if uploadErr != nil {
+			return uploadErr
+		}
+		m.Prefix = prefix
+		m.FileName = filepath.Base(key)
+		m.ChunkMethod = ChunkMethodNone
+		metadata = m
+	default:
+		m, uploadErr := s.uploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod)
+		if uploadErr != nil {
+			return uploadErr
+		}
+		m.Prefix = prefix
+		m.FileName = filepath.Base(key)
+		metadata = m
 	}
-	log.Debugf("Shard uploads took: %v", time.Since(uploadStart))
 
 	// Store metadata
 	metadataStart := time.Now()
-	_, err = s.metadataRepo.CreateMetadata(ctx, metadata)
+	_, err := s.metadataRepo.CreateMetadata(ctx, metadata)
 	log.Debugf("Metadata storage took: %v", time.Since(metadataStart))
 	log.Debugf("Total upload took: %v", time.Since(start))
 	return err
 }
 
-// DownloadFile downloads a file from cloud storage
-func (s *FileService) DownloadFile(ctx context.Context, key string, dest io.WriterAt, quiet bool, verifyIntegrity bool) error {
+// uploadFileLegacy implements the non-chunked upload path: it reads the entire
+// file into memory, erasure-codes it as a single unit, and uploads the resulting
+// shards under the original "<key>/<shardHash>" key scheme.
+func (s *FileService) uploadFileLegacy(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int) (domain.ObjectMetadata, error) {
+	// Read file data
+	readStart := time.Now()
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return domain.ObjectMetadata{}, err
+	}
+	log.Debugf("File read took: %v", time.Since(readStart))
+
+	// Check for empty file
+	if len(data) == 0 {
+		return domain.ObjectMetadata{}, errors.ErrEmptyFile
+	}
+
+	// Create shards using erasure coding
+	shardStart := time.Now()
+	metadata, shards, err := ShardFile(data, dataShards, parityShards)
+	if err != nil {
+		return domain.ObjectMetadata{}, err
+	}
+	log.Debugf("Sharding took: %v", time.Since(shardStart))
+
+	// Upload shards in parallel
+	uploadStart := time.Now()
+	if err := s.uploadShards(ctx, key, shards, metadata.ShardHashes, quiet, concurrency, parityShards); err != nil {
+		return domain.ObjectMetadata{}, err
+	}
+	log.Debugf("Shard uploads took: %v", time.Since(uploadStart))
+
+	return metadata, nil
+}
+
+// uploadFileChunked orchestrates chunked upload: it walks the chunking layer to
+// obtain successive chunks, erasure-codes each chunk independently, uploads the
+// resulting shards (keyed by "<key>/chunk_<N>/<shardHash>"), and accumulates
+// per-chunk metadata (with populated shard locations) onto the returned
+// ObjectMetadata.Chunks slice.
+func (s *FileService) uploadFileChunked(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string) (domain.ObjectMetadata, error) {
+	chunker, err := newChunker(chunkMethod, chunkSize, r)
+	if err != nil {
+		return domain.ObjectMetadata{}, err
+	}
+
+	var metadata domain.ObjectMetadata
+	metadata.ChunkMethod = chunkMethod
+	metadata.ParityShards = parityShards
+
+	chunkUploadStart := time.Now()
+
+	for {
+		chunk, err := chunker.NextChunk(r)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return domain.ObjectMetadata{}, fmt.Errorf("failed to read next chunk: %w", err)
+		}
+
+		if len(chunk.Data) == 0 {
+			continue
+		}
+
+		// Erasure-code this chunk independently
+		shardStart := time.Now()
+		chunkMeta, chunkShards, err := ShardFile(chunk.Data, dataShards, parityShards)
+		if err != nil {
+			return domain.ObjectMetadata{}, fmt.Errorf("failed to shard chunk %d: %w", chunk.Index, err)
+		}
+		log.Debugf("Chunk %d sharding took: %v", chunk.Index, time.Since(shardStart))
+
+		// Upload this chunk's shards under "<key>/chunk_<N>/<hash>".
+		// Key format: <prefix>/<filename>/chunk_<N>/<shardHash>
+		shardKeyPrefix := fmt.Sprintf("%s/chunk_%d", key, chunk.Index)
+		uploadStart := time.Now()
+		if err := s.uploadShards(ctx, shardKeyPrefix, chunkShards, chunkMeta.ShardHashes, quiet, concurrency, parityShards); err != nil {
+			log.Debugf("Chunk %d shard uploads took: %v", chunk.Index, time.Since(uploadStart))
+			return domain.ObjectMetadata{}, fmt.Errorf("failed to upload chunk %d shards: %w", chunk.Index, err)
+		}
+		log.Debugf("Chunk %d shard uploads took: %v", chunk.Index, time.Since(uploadStart))
+
+		// Accumulate chunk metadata
+		metadata.Chunks = append(metadata.Chunks, domain.ChunkMetadata{
+			ChunkIndex: chunk.Index,
+			ChunkSize:  int64(len(chunk.Data)),
+			Shards:     chunkMeta.ShardHashes,
+		})
+		metadata.OriginalSize += int64(len(chunk.Data))
+		if metadata.ShardSize == 0 && len(chunkShards) > 0 {
+			metadata.ShardSize = int64(len(chunkShards[0]))
+		}
+	}
+
+	if len(metadata.Chunks) == 0 {
+		return domain.ObjectMetadata{}, errors.ErrEmptyFile
+	}
+
+	metadata.TotalChunks = len(metadata.Chunks)
+	// For the "fixed" strategy the configured byte size is the meaningful value;
+	// for "equal-split" chunkSize holds a chunk count, so record the real byte
+	// size of the first emitted chunk instead.
+	if chunkMethod == ChunkMethodEqualSplit {
+		metadata.ChunkSize = metadata.Chunks[0].ChunkSize
+	} else {
+		metadata.ChunkSize = chunkSize
+	}
+
+	log.Debugf("Chunked upload of %d chunks took: %v", metadata.TotalChunks, time.Since(chunkUploadStart))
+
+	return metadata, nil
+}
+
+// newChunker constructs the appropriate Chunker implementation for the given
+// chunking strategy. For ChunkMethodEqualSplit the reader must be seekable so
+// the total file size can be determined up front.
+//
+// For ChunkMethodEqualSplit, chunkSize is interpreted as the target number of
+// chunks. For ChunkMethodFixed it is the byte size of each chunk.
+func newChunker(chunkMethod string, chunkSize int64, r io.Reader) (chunking.Chunker, error) {
+	switch chunkMethod {
+	case ChunkMethodFixed:
+		if chunkSize <= 0 {
+			return nil, fmt.Errorf("chunkSize must be greater than 0 for %q chunking", ChunkMethodFixed)
+		}
+		return chunking.NewFixedChunker(int(chunkSize))
+	case ChunkMethodEqualSplit:
+		total, err := readerSize(r)
+		if err != nil {
+			return nil, fmt.Errorf("%q chunking requires a seekable reader: %w", ChunkMethodEqualSplit, err)
+		}
+		if chunkSize <= 0 {
+			return nil, fmt.Errorf("chunkSize (number of chunks) must be greater than 0 for %q chunking", ChunkMethodEqualSplit)
+		}
+		return chunking.NewEqualSplitChunker(int(chunkSize), total)
+	default:
+		return nil, fmt.Errorf("unsupported chunk method: %q", chunkMethod)
+	}
+}
+
+// readerSize returns the total size in bytes of a seekable reader by seeking to
+// the end and rewinding to the start. Readers that don't implement io.Seeker
+// cannot be sized without being consumed, which prevents equal-split chunking
+// from pre-calculating chunk boundaries.
+func readerSize(r io.Reader) (int64, error) {
+	seeker, ok := r.(io.Seeker)
+	if !ok {
+		return 0, fmt.Errorf("reader must implement io.Seeker")
+	}
+	end, err := seeker.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, fmt.Errorf("seek to end failed: %w", err)
+	}
+	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("rewind to start failed: %w", err)
+	}
+	return end, nil
+}
+
+// DownloadFile downloads a file from cloud storage to the provided writer.
+// It supports both legacy (non-chunked) files and chunked files, automatically
+// detecting the file type based on metadata.ChunkMethod.
+func (s *FileService) DownloadFile(ctx context.Context, key string, dest io.Writer, quiet bool, verifyIntegrity bool) error {
 	// Get prefix and filename for metadata lookup
 	prefix := filepath.Dir(key)
 	fileName := filepath.Base(key)
@@ -134,6 +338,12 @@ func (s *FileService) DownloadFile(ctx context.Context, key string, dest io.Writ
 
 	log.Debugf("Object Metadata: %+v\n", metadata)
 
+	// Check if file is chunked
+	if metadata.ChunkMethod != ChunkMethodNone && len(metadata.Chunks) > 0 {
+		return s.downloadFileChunked(ctx, key, dest, metadata, quiet, verifyIntegrity)
+	}
+
+	// Legacy download path for non-chunked files
 	// Download shards to temporary files (retaining original shard indices)
 	indexedShards, err := s.downloadShards(ctx, metadata.ShardHashes, metadata.ParityShards, quiet, verifyIntegrity)
 	if err != nil {
@@ -153,9 +363,181 @@ func (s *FileService) DownloadFile(ctx context.Context, key string, dest io.Writ
 		return err
 	}
 
-	// Write reconstructed data to destination
-	_, err = dest.WriteAt(reconstructedData, 0)
+	// Write reconstructed data to destination (streaming to io.Writer)
+	_, err = dest.Write(reconstructedData)
 	return err
+}
+
+// downloadFileChunked handles downloading a chunked file.
+// It iterates through each chunk, downloads the chunk's shards, reconstructs
+// each chunk, and writes it incrementally to the destination.
+func (s *FileService) downloadFileChunked(ctx context.Context, key string, dest io.Writer, metadata domain.ObjectMetadata, quiet bool, verifyIntegrity bool) error {
+	// Download and reconstruct each chunk, writing incrementally to dest
+	for _, chunk := range metadata.Chunks {
+		// Create temp files for each shard in this chunk
+		tempFilePaths := make([]string, len(chunk.Shards))
+		tempFiles := make([]*os.File, len(chunk.Shards))
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		var downloadErrors []error
+
+		cancelCtx, cancel := context.WithCancel(context.Background())
+
+		// Download each shard of the chunk
+		for i, shardInfo := range chunk.Shards {
+			wg.Add(1)
+			go func(i int, shardInfo domain.ShardStorage) {
+				defer wg.Done()
+
+				// Select bucket and repository for this shard
+				repo, err := s.placer.GetRepositoryForBucket(shardInfo.BucketName)
+				if err != nil {
+					mu.Lock()
+					downloadErrors = append(downloadErrors, err)
+					mu.Unlock()
+					return
+				}
+
+				// Create temp file for this shard
+				tempFile, err := os.CreateTemp("", fmt.Sprintf("chunk_shard_%d_*.tmp", i))
+				if err != nil {
+					mu.Lock()
+					downloadErrors = append(downloadErrors, err)
+					mu.Unlock()
+					return
+				}
+				tempFilePath := tempFile.Name()
+
+				// Download shard to temp file
+				err = repo.Download(cancelCtx, shardInfo.Key, tempFile, quiet)
+				tempFile.Close() // Close after download
+				if err != nil {
+					os.Remove(tempFilePath)
+					mu.Lock()
+					downloadErrors = append(downloadErrors, err)
+					mu.Unlock()
+					return
+				}
+
+				// Verify integrity if requested
+				if verifyIntegrity {
+					data, err := os.ReadFile(tempFilePath)
+					if err != nil {
+						os.Remove(tempFilePath)
+						mu.Lock()
+						downloadErrors = append(downloadErrors, err)
+						mu.Unlock()
+						return
+					}
+					if err := verifyFileIntegrity(data, shardInfo.Hash); err != nil {
+						os.Remove(tempFilePath)
+						mu.Lock()
+						downloadErrors = append(downloadErrors, err)
+						mu.Unlock()
+						return
+					}
+				}
+
+				// Store successful download
+				mu.Lock()
+				tempFilePaths[shardInfo.Index] = tempFilePath
+				tempFiles[i] = tempFile
+				mu.Unlock()
+			}(i, shardInfo)
+		}
+
+		// Wait for all downloads to complete
+		wg.Wait()
+		cancel() // Cancel context after all downloads complete for this chunk
+
+		// Check for errors
+		mu.Lock()
+		if len(downloadErrors) > 0 {
+			for _, path := range tempFilePaths {
+				if path != "" {
+					os.Remove(path)
+				}
+			}
+			mu.Unlock()
+			return downloadErrors[0]
+		}
+		mu.Unlock()
+
+		// Check if we have enough shards for reconstruction
+		dataShards := len(chunk.Shards) - metadata.ParityShards
+		if int(successfulShardsCount(tempFilePaths)) < dataShards {
+			return errors.ErrInsufficientShards
+		}
+
+		// Reconstruct the chunk from downloaded shards
+		chunkData, err := s.reconstructChunk(tempFilePaths, chunk, metadata.ParityShards)
+		if err != nil {
+			// Cleanup temp files
+			for _, path := range tempFilePaths {
+				if path != "" {
+					os.Remove(path)
+				}
+			}
+			return err
+		}
+
+		// Write chunk data to destination (streaming)
+		if _, err := dest.Write(chunkData); err != nil {
+			// Cleanup temp files
+			for _, path := range tempFilePaths {
+				if path != "" {
+					os.Remove(path)
+				}
+			}
+			return fmt.Errorf("failed to write chunk %d: %w", chunk.ChunkIndex, err)
+		}
+
+		// Cleanup temp files for this chunk
+		for _, path := range tempFilePaths {
+			if path != "" {
+				os.Remove(path)
+			}
+		}
+	}
+
+	return nil
+}
+
+// successfulShardsCount returns the number of non-empty paths in the slice
+func successfulShardsCount(paths []string) int {
+	count := 0
+	for _, p := range paths {
+		if p != "" {
+			count++
+		}
+	}
+	return count
+}
+
+// reconstructChunk reconstructs a single chunk from downloaded shard files.
+func (s *FileService) reconstructChunk(tempFilePaths []string, chunk domain.ChunkMetadata, parityShards int) ([]byte, error) {
+	// Read all shard data into memory for reconstruction
+	shards := make([][]byte, len(tempFilePaths))
+	for i, path := range tempFilePaths {
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read shard %d: %w", i, err)
+		}
+		shards[i] = data
+	}
+
+	// Create metadata for this chunk
+	chunkMeta := domain.ObjectMetadata{
+		ParityShards: parityShards,
+		OriginalSize: chunk.ChunkSize,
+		ShardHashes:  chunk.Shards,
+	}
+
+	// Reconstruct
+	return ReconstructFile(shards, chunkMeta)
 }
 
 // DeleteFile deletes a file from cloud storage
@@ -177,12 +559,19 @@ func (s *FileService) DeleteFile(ctx context.Context, key string) error {
 	return s.metadataRepo.DeleteMetadata(ctx, prefix, fileName)
 }
 
-// uploadShards uploads erasure-coded shards in parallel with concurrency control
+// uploadShards uploads erasure-coded shards in parallel with concurrency control.
+//
+// Each shard is stored under the key "<shardKeyPrefix>/<shardHash>" (where the
+// hash is the CRC64 checksum recorded in the corresponding entry of
+// storageSlots). On successful upload the storage location is written into the
+// matching index-aligned entry of storageSlots, so storageSlots must have the
+// same length as shards and carry the pre-computed shard hashes.
+//
 // This function implements the core shard upload strategy:
 // 1. Creates goroutines for each shard upload (limited by semaphore)
 // 2. Uses fail-fast logic - stops if too many uploads fail
-// 3. Updates metadata with actual storage locations after successful uploads
-func (s *FileService) uploadShards(ctx context.Context, key string, shards [][]byte, metadata *domain.ObjectMetadata, quiet bool, concurrency, parityShards int) error {
+// 3. Updates storageSlots with actual storage locations after successful uploads
+func (s *FileService) uploadShards(ctx context.Context, shardKeyPrefix string, shards [][]byte, storageSlots []domain.ShardStorage, quiet bool, concurrency, parityShards int) error {
 	// Setup channels for goroutine coordination
 	var wg sync.WaitGroup
 	errorCh := make(chan error, len(shards)) // Buffered to prevent goroutine blocking
@@ -202,10 +591,10 @@ func (s *FileService) uploadShards(ctx context.Context, key string, shards [][]b
 			semaphore <- struct{}{}        // Acquire semaphore slot
 			defer func() { <-semaphore }() // Release semaphore slot
 
-			// Generate shard key using original hash from metadata
-			// Format: "original-file-key/shard-hash"
-			originalHash := metadata.ShardHashes[i].Hash
-			shardKey := fmt.Sprintf("%s/%s", key, originalHash)
+			// Generate shard key using original hash from the storage slot.
+			// Format: "<shardKeyPrefix>/<shard-hash>"
+			originalHash := storageSlots[i].Hash
+			shardKey := fmt.Sprintf("%s/%s", shardKeyPrefix, originalHash)
 
 			// Select bucket and repository for this shard using placement algorithm
 			bucketName, repo, err := s.placer.Place(i)
@@ -265,13 +654,13 @@ func (s *FileService) uploadShards(ctx context.Context, key string, shards [][]b
 		return uploadErr
 	}
 
-	// Update metadata with actual storage locations
+	// Update storage slots with actual storage locations
 	// This allows the download process to find shards later
 	for result := range pathCh {
-		metadata.ShardHashes[result.index].Index = result.index
-		metadata.ShardHashes[result.index].StorageType = result.storageType
-		metadata.ShardHashes[result.index].BucketName = result.bucketName
-		metadata.ShardHashes[result.index].Key = result.key
+		storageSlots[result.index].Index = result.index
+		storageSlots[result.index].StorageType = result.storageType
+		storageSlots[result.index].BucketName = result.bucketName
+		storageSlots[result.index].Key = result.key
 	}
 
 	return nil
