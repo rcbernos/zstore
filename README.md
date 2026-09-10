@@ -15,8 +15,6 @@ Ensure you have **Go (v1.18+)** installed on your system (Debian/Linux or macOS)
    go build -o zstore ./cmd
    ```
 
----
-
 ### 2. Cloud Storage Provisioning
 
 Create your cloud storage buckets before running the application:
@@ -32,8 +30,6 @@ Create your cloud storage buckets before running the application:
   2. Click **Create Bucket**.
   3. Select **Region** as the Location Type and choose **`asia-southeast1` (Singapore)**.
   4. Enter a unique bucket name (e.g., `my-zstore-gcs-bucket`) and create it.
-
----
 
 ### 3. Credential & Environment Setup
 
