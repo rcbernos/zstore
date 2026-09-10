@@ -329,7 +329,9 @@ func readerSize(r io.Reader) (int64, error) {
 // DownloadFile downloads a file from cloud storage to the provided writer.
 // It supports both legacy (non-chunked) files and chunked files, automatically
 // detecting the file type based on metadata.ChunkMethod.
-func (s *FileService) DownloadFile(ctx context.Context, key string, dest io.Writer, quiet bool, verifyIntegrity bool) error {
+// When chunked is true, it uses chunked download for chunked files if available.
+// When chunked is false, it forces the legacy download path.
+func (s *FileService) DownloadFile(ctx context.Context, key string, dest io.Writer, quiet bool, verifyIntegrity bool, chunked bool) error {
 	// Get prefix and filename for metadata lookup
 	prefix := filepath.Dir(key)
 	fileName := filepath.Base(key)
@@ -343,7 +345,7 @@ func (s *FileService) DownloadFile(ctx context.Context, key string, dest io.Writ
 	log.Debugf("Object Metadata: %+v\n", metadata)
 
 	// Check if file is chunked
-	if metadata.ChunkMethod != ChunkMethodNone && len(metadata.Chunks) > 0 {
+	if chunked && metadata.ChunkMethod != ChunkMethodNone && len(metadata.Chunks) > 0 {
 		return s.downloadFileChunked(ctx, key, dest, metadata, quiet, verifyIntegrity)
 	}
 

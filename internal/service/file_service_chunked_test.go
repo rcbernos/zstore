@@ -437,7 +437,7 @@ func TestDownloadFile_Legacy(t *testing.T) {
 
 	// Download using io.Writer
 	var buf bytes.Buffer
-	if err := fileService.DownloadFile(ctx, key, &buf, true, true); err != nil {
+	if err := fileService.DownloadFile(ctx, key, &buf, true, true, true); err != nil {
 		t.Fatalf("DownloadFile failed: %v", err)
 	}
 
@@ -473,7 +473,7 @@ func TestDownloadFile_Chunked(t *testing.T) {
 
 	// Download using io.Writer
 	var buf bytes.Buffer
-	if err := fileService.DownloadFile(ctx, key, &buf, true, true); err != nil {
+	if err := fileService.DownloadFile(ctx, key, &buf, true, true, true); err != nil {
 		t.Fatalf("DownloadFile failed: %v", err)
 	}
 
@@ -497,7 +497,7 @@ func TestDownloadFile_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	var buf bytes.Buffer
-	err := fileService.DownloadFile(ctx, "nonexistent/file.bin", &buf, true, true)
+	err := fileService.DownloadFile(ctx, "nonexistent/file.bin", &buf, true, true, true)
 	if err == nil {
 		t.Fatal("expected error for non-existent file, got nil")
 	}

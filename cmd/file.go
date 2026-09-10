@@ -181,6 +181,7 @@ var downloadCmd = &cobra.Command{
 		quiet, _ := cmd.Flags().GetBool("quiet")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		verifyIntegrity, _ := cmd.Flags().GetBool("verify-integrity")
+		chunked, _ := cmd.Flags().GetBool("chunked")
 
 		// If output path is a directory, use the filename from the key
 		if stat, err := os.Stat(outputPath); err == nil && stat.IsDir() {
@@ -202,7 +203,7 @@ var downloadCmd = &cobra.Command{
 		defer outFile.Close()
 
 		fileService.SetConcurrency(concurrency)
-		err = fileService.DownloadFile(context.Background(), key, outFile, quiet, verifyIntegrity)
+		err = fileService.DownloadFile(context.Background(), key, outFile, quiet, verifyIntegrity, chunked)
 		if err != nil {
 			fmt.Printf("Error downloading file: %v\n", err)
 			return
@@ -395,6 +396,7 @@ func init() {
 	downloadCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")
 	downloadCmd.Flags().Int("concurrency", 3, "Number of concurrent shard downloads")
 	downloadCmd.Flags().Bool("verify-integrity", false, "Verify shard integrity using CRC64 hashes")
+	downloadCmd.Flags().Bool("chunked", true, "Download as chunked if available")
 	downloadRawCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")
 	downloadRawCmd.Flags().String("region", "", "AWS region for S3 bucket (required for S3)")
 	deleteRawCmd.Flags().String("region", "", "AWS region for S3 bucket (required for S3)")

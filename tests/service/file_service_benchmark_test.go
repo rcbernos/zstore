@@ -133,7 +133,7 @@ func BenchmarkFileService_ErasureCoded_DownloadFile(b *testing.B) {
 				if err != nil {
 					b.Fatalf("Failed to create temp file: %v", err)
 				}
-				err = fileService.DownloadFile(context.Background(), key, tempFile, true, false)
+				err = fileService.DownloadFile(context.Background(), key, tempFile, true, false, true)
 				tempFile.Close()
 				os.Remove(tempFile.Name())
 				if err != nil {
