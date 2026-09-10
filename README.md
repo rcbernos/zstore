@@ -120,6 +120,28 @@ Note: use `source .env` to ensure that your shell is using the correct environme
 ./zstore upload /path/to/file.txt zs://my-bucket/path/file.txt --quiet
 ```
 
+**Chunked Uploads (for large files)**
+
+For large files, use chunking to reduce memory usage during upload:
+
+```bash
+# Upload with chunking enabled (reduces memory footprint)
+# Note: --chunk-size alone enables chunking with default --chunk-method=fixed
+./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=16777216
+
+# Upload with custom chunk size (default: 16MB)
+./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=33554432
+
+# Upload with equal-split chunking (divides file evenly across all chunks)
+./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=16777216 --chunk-method=equal-split
+```
+
+**Chunking options for uploads:**
+- `--chunk-size`: Target size for each chunk in bytes (default: 16777216 = 16MB). When specified, chunking is automatically enabled with `--chunk-method=fixed`.
+- `--chunk-method`: Chunking strategy - `none` (disabled), `fixed` (fixed size chunks, used by default when `--chunk-size` is set), or `equal-split` (evenly distributed chunks)
+
+> **Note:** Chunking reduces memory usage for large files but may result in more API calls for shards.
+
 **Upload Raw Files (without erasure coding)**
 ```bash
 # Upload without erasure coding (raw file) - region required for S3
@@ -145,6 +167,22 @@ Note: use `source .env` to ensure that your shell is using the correct environme
 # Download in quiet mode
 ./zstore download zs://my-bucket/path/file.txt /path/to/output.txt --quiet
 ```
+
+**Chunked Downloads**
+
+For large files that were uploaded with chunking, you can enable chunked download for memory-efficient operations:
+
+```bash
+# Download with chunked download enabled (default)
+./zstore download zs://my-bucket/large-file.zip /path/to/output.zip
+
+# Force legacy download (may fail for chunked files)
+./zstore download zs://my-bucket/large-file.zip /path/to/output.zip --chunked=false
+```
+
+**Chunked Download Options:**
+- `--chunked`: Enable chunked download for memory-efficient large file downloads (default: true)
+- `--verify-integrity`: Verify shard integrity using CRC64 hashes (default: false)
 
 **Download Raw Files (without erasure coding)**
 ```bash
@@ -194,10 +232,13 @@ Note: use `source .env` to ensure that your shell is using the correct environme
 - `--data-shards`: Number of data shards for erasure coding (default: 4)
 - `--parity-shards`: Number of parity shards for erasure coding (default: 2)
 - `--concurrency`: Number of concurrent shard uploads (default: 3)
+- `--chunk-size`: Target chunk size in bytes for chunked uploads (default: 16777216 = 16MB). When specified, enables chunking automatically.
+- `--chunk-method`: Chunking strategy for uploads: `none` (disabled), `fixed` (default when `--chunk-size` is set), `equal-split` (default: none)
 
 ### Download Options
 - `--concurrency`: Number of concurrent shard downloads (default: 3)
 - `--verify-integrity`: Enable CRC64 hash verification of downloaded shards (default: false)
+- `--chunked`: Download as chunked if available (default: true)
 
 ### Raw Operations
 - `upload-raw`: Upload files directly to S3/GCS without erasure coding (uses s3:// or gs:// URLs, --region required for S3)
