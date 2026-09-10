@@ -86,8 +86,12 @@ const (
 // compatibility. It reads the whole file into memory and shards it as a single
 // unit. For memory-efficient processing of large files prefer UploadFileChunked,
 // which streams the file through the chunking layer.
-func (s *FileService) UploadFile(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int) error {
-	return s.UploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, 0, ChunkMethodNone)
+//
+// When chunkSize is 0 or chunkMethod is "none", the file is processed as a
+// single erasure-coded unit (legacy behavior). Otherwise, the file is split
+// into chunks and each chunk is independently erasure-coded.
+func (s *FileService) UploadFile(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string) error {
+	return s.UploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod)
 }
 
 // UploadFileChunked uploads a file with optional chunked upload support.

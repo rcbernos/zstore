@@ -53,7 +53,7 @@ var uploadCmd = &cobra.Command{
 	Args:  cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		filePath := args[0]
-		
+
 		// Auto-detect destination if not provided or if destination ends with /
 		var key string
 		if len(args) == 2 {
@@ -84,7 +84,9 @@ var uploadCmd = &cobra.Command{
 		dataShards, _ := cmd.Flags().GetInt("data-shards")
 		parityShards, _ := cmd.Flags().GetInt("parity-shards")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
-		err = fileService.UploadFile(context.Background(), key, file, quiet, dataShards, parityShards, concurrency)
+		chunkSize, _ := cmd.Flags().GetInt64("chunk-size")
+		chunkMethod, _ := cmd.Flags().GetString("chunk-method")
+		err = fileService.UploadFile(context.Background(), key, file, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod)
 		if err != nil {
 			fmt.Printf("Error uploading file: %v\n", err)
 			return
@@ -99,16 +101,16 @@ var uploadRawCmd = &cobra.Command{
 	Args:  cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		filePath := args[0]
-		
+
 		if len(args) < 2 {
 			fmt.Printf("Error: destination URL is required (s3://bucket/key or gs://bucket/key)\n")
 			return
 		}
-		
+
 		url := args[1]
 		var bucket, key string
 		var err error
-		
+
 		// Parse URL based on scheme
 		if strings.HasPrefix(url, "s3://") {
 			bucket, key, err = parseS3URL(url)
@@ -118,12 +120,12 @@ var uploadRawCmd = &cobra.Command{
 			fmt.Printf("Error: URL must start with s3:// or gs://\n")
 			return
 		}
-		
+
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		
+
 		// If key ends with / or is empty, append filename
 		if key == "" || strings.HasSuffix(key, "/") {
 			key = key + filepath.Base(filePath)
@@ -138,7 +140,7 @@ var uploadRawCmd = &cobra.Command{
 
 		quiet, _ := cmd.Flags().GetBool("quiet")
 		region, _ := cmd.Flags().GetString("region")
-		
+
 		// Route to appropriate repository
 		if strings.HasPrefix(url, "s3://") {
 			if region == "" {
@@ -219,7 +221,7 @@ var downloadRawCmd = &cobra.Command{
 
 		var bucket, key string
 		var err error
-		
+
 		// Parse URL based on scheme
 		if strings.HasPrefix(url, "s3://") {
 			bucket, key, err = parseS3URL(url)
@@ -229,7 +231,7 @@ var downloadRawCmd = &cobra.Command{
 			fmt.Printf("Error: URL must start with s3:// or gs://\n")
 			return
 		}
-		
+
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
@@ -237,7 +239,7 @@ var downloadRawCmd = &cobra.Command{
 
 		quiet, _ := cmd.Flags().GetBool("quiet")
 		region, _ := cmd.Flags().GetString("region")
-		
+
 		// If output path is a directory, use the filename from the key
 		if stat, err := os.Stat(outputPath); err == nil && stat.IsDir() {
 			fileName := filepath.Base(key)
@@ -256,7 +258,7 @@ var downloadRawCmd = &cobra.Command{
 			return
 		}
 		defer outFile.Close()
-		
+
 		// Route to appropriate repository
 		if strings.HasPrefix(url, "s3://") {
 			if region == "" {
@@ -267,7 +269,7 @@ var downloadRawCmd = &cobra.Command{
 		} else {
 			err = rawFileService.DownloadFromRepository(context.Background(), bucket, key, outFile, quiet, objectstore.GCSType, "")
 		}
-		
+
 		if err != nil {
 			fmt.Printf("Error downloading file: %v\n", err)
 			return
@@ -309,7 +311,7 @@ var deleteRawCmd = &cobra.Command{
 
 		var bucket, key string
 		var err error
-		
+
 		// Parse URL based on scheme
 		if strings.HasPrefix(url, "s3://") {
 			bucket, key, err = parseS3URL(url)
@@ -319,7 +321,7 @@ var deleteRawCmd = &cobra.Command{
 			fmt.Printf("Error: URL must start with s3:// or gs://\n")
 			return
 		}
-		
+
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
@@ -337,7 +339,7 @@ var deleteRawCmd = &cobra.Command{
 		} else {
 			err = rawFileService.DeleteFromRepository(context.Background(), bucket, key, objectstore.GCSType, "")
 		}
-		
+
 		if err != nil {
 			fmt.Printf("Error deleting file: %v\n", err)
 			return
@@ -352,28 +354,28 @@ var listCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		zsURL := args[0]
-		
+
 		// Parse zs:// URL to extract prefix
 		prefix, err := parseZsURL(zsURL)
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			return
 		}
-		
+
 		// Remove trailing slash for consistent prefix matching
 		prefix = strings.TrimSuffix(prefix, "/")
-		
+
 		files, err := fileService.ListFiles(context.Background(), prefix)
 		if err != nil {
 			fmt.Printf("Error listing files: %v\n", err)
 			return
 		}
-		
+
 		if len(files) == 0 {
 			fmt.Printf("No files found in %s\n", zsURL)
 			return
 		}
-		
+
 		fmt.Printf("Files in %s:\n", zsURL)
 		for _, file := range files {
 			fmt.Printf("  %s/%s\n", file.Prefix, file.FileName)
@@ -386,6 +388,8 @@ func init() {
 	uploadCmd.Flags().Int("data-shards", 4, "Number of data shards for erasure coding")
 	uploadCmd.Flags().Int("parity-shards", 2, "Number of parity shards for erasure coding")
 	uploadCmd.Flags().Int("concurrency", 3, "Number of concurrent shard uploads")
+	uploadCmd.Flags().Int64("chunk-size", 16*1024*1024, "Target chunk size in bytes for chunked uploads")
+	uploadCmd.Flags().String("chunk-method", "none", "Chunking method: none, fixed, equal-split")
 	uploadRawCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")
 	uploadRawCmd.Flags().String("region", "", "AWS region for S3 bucket (required for S3)")
 	downloadCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")

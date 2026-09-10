@@ -85,7 +85,7 @@ func BenchmarkFileService_ErasureCoded_UploadFile(b *testing.B) {
 				key := "benchmark/test-file"
 				reader := bytes.NewReader(data)
 				
-				err := fileService.UploadFile(context.Background(), key, reader, true, 4, 2, 3)
+				err := fileService.UploadFile(context.Background(), key, reader, true, 4, 2, 3, 0, "none")
 				if err != nil {
 					b.Fatalf("UploadFile failed: %v", err)
 				}
@@ -119,7 +119,7 @@ func BenchmarkFileService_ErasureCoded_DownloadFile(b *testing.B) {
 			rand.Read(data)
 			key := "benchmark/download-test-file"
 			
-			err := fileService.UploadFile(context.Background(), key, bytes.NewReader(data), true, 4, 2, 3)
+			err := fileService.UploadFile(context.Background(), key, bytes.NewReader(data), true, 4, 2, 3, 0, "none")
 			if err != nil {
 				b.Fatalf("Setup failed: %v", err)
 			}
@@ -293,7 +293,7 @@ func BenchmarkFileService_ErasureCoded_ConcurrencyComparison(b *testing.B) {
 				key := "benchmark/concurrency-test"
 				reader := bytes.NewReader(data)
 				
-				err := fileService.UploadFile(context.Background(), key, reader, true, 4, 2, concurrency)
+				err := fileService.UploadFile(context.Background(), key, reader, true, 4, 2, concurrency, 0, "none")
 				if err != nil {
 					b.Fatalf("UploadFile failed: %v", err)
 				}

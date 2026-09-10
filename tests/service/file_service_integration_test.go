@@ -77,7 +77,7 @@ func TestFileService_UploadDownloadDelete_Integration(t *testing.T) {
 			originalHash := sha256.Sum256(originalData)
 			key := "integration-test/test-file.bin"
 
-			err = fileService.UploadFile(context.Background(), key, bytes.NewReader(originalData), true, 4, 2, 3)
+			err = fileService.UploadFile(context.Background(), key, bytes.NewReader(originalData), true, 4, 2, 3, 0, "none")
 			if err != nil {
 				t.Fatalf("UploadFile failed: %v", err)
 			}
@@ -148,7 +148,7 @@ func TestFileService_UploadDownload_DifferentShardConfigurations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			key := "integration-test/shard-config-test.bin"
 
-			err = fileService.UploadFile(context.Background(), key, bytes.NewReader(originalData), true, tc.dataShards, tc.parityShards, 3)
+			err = fileService.UploadFile(context.Background(), key, bytes.NewReader(originalData), true, tc.dataShards, tc.parityShards, 3, 0, "none")
 			if err != nil {
 				t.Fatalf("UploadFile failed: %v", err)
 			}
@@ -198,7 +198,7 @@ func TestFileService_ConcurrentOperations(t *testing.T) {
 	for i := 0; i < numFiles; i++ {
 		keys[i] = fmt.Sprintf("integration-test/concurrent-test-%d.bin", i)
 		
-		err = fileService.UploadFile(context.Background(), keys[i], bytes.NewReader(originalData), true, 4, 2, 3)
+		err = fileService.UploadFile(context.Background(), keys[i], bytes.NewReader(originalData), true, 4, 2, 3, 0, "none")
 		if err != nil {
 			t.Fatalf("UploadFile %d failed: %v", i, err)
 		}
@@ -240,7 +240,7 @@ func TestFileService_EmptyFile(t *testing.T) {
 	originalData := []byte{}
 	key := "integration-test/empty-file.bin"
 
-	err := fileService.UploadFile(context.Background(), key, bytes.NewReader(originalData), true, 4, 2, 3)
+	err := fileService.UploadFile(context.Background(), key, bytes.NewReader(originalData), true, 4, 2, 3, 0, "none")
 	if err == nil {
 		t.Error("Expected UploadFile to fail for empty file, but it succeeded")
 	}
@@ -262,7 +262,7 @@ func TestFileService_AutoDetectFilename(t *testing.T) {
 	expectedKey := filepath.Base(sourceFilename) // This simulates CLI auto-detection logic
 	
 	// Upload with auto-detected filename (simulating CLI behavior)
-	err = fileService.UploadFile(context.Background(), expectedKey, bytes.NewReader(originalData), true, 4, 2, 3)
+	err = fileService.UploadFile(context.Background(), expectedKey, bytes.NewReader(originalData), true, 4, 2, 3, 0, "none")
 	if err != nil {
 		t.Fatalf("UploadFile failed: %v", err)
 	}

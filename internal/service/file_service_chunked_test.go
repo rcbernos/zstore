@@ -252,7 +252,7 @@ func TestUploadFile_Legacy_RoundTrip(t *testing.T) {
 	data := makeTestData(2048)
 	key := "unittest/legacy.bin"
 
-	if err := fileService.UploadFile(ctx, key, bytes.NewReader(data), true, 4, 2, 3); err != nil {
+	if err := fileService.UploadFile(ctx, key, bytes.NewReader(data), true, 4, 2, 3, 0, "none"); err != nil {
 		t.Fatalf("UploadFile failed: %v", err)
 	}
 
@@ -261,8 +261,8 @@ func TestUploadFile_Legacy_RoundTrip(t *testing.T) {
 		t.Fatalf("GetMetadata failed: %v", err)
 	}
 
-	if meta.ChunkMethod != ChunkMethodNone {
-		t.Errorf("expected ChunkMethod %q, got %q", ChunkMethodNone, meta.ChunkMethod)
+	if meta.ChunkMethod != "none" {
+		t.Errorf("expected ChunkMethod %q, got %q", "none", meta.ChunkMethod)
 	}
 	if meta.OriginalSize != int64(len(data)) {
 		t.Errorf("expected OriginalSize %d, got %d", len(data), meta.OriginalSize)
@@ -392,7 +392,7 @@ func TestUploadFileChunked_EmptyFile(t *testing.T) {
 func TestUploadFile_Legacy_EmptyFile(t *testing.T) {
 	fileService, _ := newTestFileService(t)
 	ctx := context.Background()
-	err := fileService.UploadFile(ctx, "unittest/empty-legacy.bin", bytes.NewReader(nil), true, 4, 2, 3)
+	err := fileService.UploadFile(ctx, "unittest/empty-legacy.bin", bytes.NewReader(nil), true, 4, 2, 3, 0, "none")
 	if err == nil {
 		t.Fatal("expected error uploading empty file via UploadFile, got nil")
 	}
@@ -425,7 +425,7 @@ func TestDownloadFile_Legacy(t *testing.T) {
 	key := "unittest/download-legacy.bin"
 
 	// Upload file
-	if err := fileService.UploadFile(ctx, key, bytes.NewReader(data), true, 4, 2, 3); err != nil {
+	if err := fileService.UploadFile(ctx, key, bytes.NewReader(data), true, 4, 2, 3, 0, "none"); err != nil {
 		t.Fatalf("UploadFile failed: %v", err)
 	}
 
@@ -447,8 +447,8 @@ func TestDownloadFile_Legacy(t *testing.T) {
 	}
 
 	// Verify metadata
-	if meta.ChunkMethod != ChunkMethodNone {
-		t.Errorf("expected ChunkMethod %q, got %q", ChunkMethodNone, meta.ChunkMethod)
+	if meta.ChunkMethod != "none" {
+		t.Errorf("expected ChunkMethod %q, got %q", "none", meta.ChunkMethod)
 	}
 }
 
