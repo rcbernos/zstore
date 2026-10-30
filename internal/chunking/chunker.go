@@ -27,6 +27,7 @@ package chunking
 
 import (
 	"errors"
+	"hash"
 	"io"
 )
 
@@ -101,3 +102,51 @@ var (
 	// given chunker implementation.
 	ErrUnsupported = errors.New("operation not supported by this chunker")
 )
+
+// FastCDC configuration constants
+const (
+	// DefaultFastCDCTargetSize is the target average chunk size (8KB)
+	DefaultFastCDCTargetSize = 8 * 1024
+	// DefaultFastCDCMinSize is the minimum chunk size (2KB)
+	DefaultFastCDCMinSize = 2 * 1024
+	// DefaultFastCDCMaxSize is the maximum chunk size (16KB, as recommended by paper)
+	DefaultFastCDCMaxSize = 16 * 1024
+	// DefaultFastCDCLevel is the default chunking level (1 = primary boundaries)
+	DefaultFastCDCLevel = 1
+	// DefaultFastCDCWindowSize is the default rolling hash window size (64 bytes)
+	DefaultFastCDCWindowSize = 64
+)
+
+// FastCDCConfig holds configuration for FastCDC chunking
+type FastCDCConfig struct {
+	// TargetSize is the target average chunk size in bytes
+	// Must be >= MinSize and <= MaxSize
+	TargetSize int
+
+	// MinSize is the minimum chunk size in bytes
+	// Must be > 0 and <= TargetSize
+	MinSize int
+
+	// MaxSize is the maximum chunk size in bytes
+	// Must be >= TargetSize
+	MaxSize int
+
+	// Mask is the bit mask for boundary detection
+	// Lower bits = smaller chunks, more boundaries
+	// Per FastCDC paper: mask = (1 << k) - 1 where k = floor(log2(TargetSize))
+	// Level does NOT affect mask - only skip factor varies by level
+	Mask uint32
+
+	// Level is the FastCDC chunking level (1, 2, or 3)
+	// Level 1: Primary boundaries (skip=1, smallest chunks, most granular)
+	// Level 2: Aggregated boundaries (skip=2, ~2x larger chunks, faster)
+	// Level 3: Coarse boundaries (skip=4, ~4x larger chunks, fastest for re-chunking)
+	Level int
+
+	// WindowSize is the rolling hash window size in bytes
+	// Default is 64 for 8KB target, should be proportional to target size
+	WindowSize int
+
+	// HashFunc is the hash function to use (default: Gear Hash)
+	HashFunc func() hash.Hash32
+}

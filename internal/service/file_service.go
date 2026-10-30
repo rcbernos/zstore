@@ -78,6 +78,10 @@ const (
 	// ChunkMethodEqualSplit means the object was split into N roughly equal-sized
 	// chunks before each chunk was independently erasure-coded.
 	ChunkMethodEqualSplit = "equal-split"
+	// ChunkMethodFastCDC means the object was split using content-defined chunking
+	// (FastCDC algorithm) before each chunk was independently erasure-coded.
+	// This enables deduplication of identical content across different files.
+	ChunkMethodFastCDC = "fastcdc"
 )
 
 // UploadFile uploads a file across multiple cloud storage buckets.
@@ -90,8 +94,8 @@ const (
 // When chunkSize is 0 or chunkMethod is "none", the file is processed as a
 // single erasure-coded unit (legacy behavior). Otherwise, the file is split
 // into chunks and each chunk is independently erasure-coded.
-func (s *FileService) UploadFile(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string) error {
-	return s.UploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod)
+func (s *FileService) UploadFile(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string, level int, windowSize int) error {
+	return s.UploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod, level, windowSize)
 }
 
 // UploadFileChunked uploads a file with optional chunked upload support.
@@ -114,7 +118,7 @@ func (s *FileService) UploadFile(ctx context.Context, key string, r io.Reader, q
 // populated shard locations) is recorded on ObjectMetadata.Chunks. The
 // top-level ShardHashes field is left empty for chunked objects so the download
 // path can distinguish chunked objects from legacy ones.
-func (s *FileService) UploadFileChunked(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string) error {
+func (s *FileService) UploadFileChunked(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string, level int, windowSize int) error {
 	start := time.Now()
 
 	if chunkMethod == "" {
@@ -149,7 +153,7 @@ func (s *FileService) UploadFileChunked(ctx context.Context, key string, r io.Re
 		m.ChunkMethod = ChunkMethodNone
 		metadata = m
 	default:
-		m, uploadErr := s.uploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod)
+		m, uploadErr := s.uploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod, level, windowSize)
 		if uploadErr != nil {
 			return uploadErr
 		}
@@ -206,8 +210,8 @@ func (s *FileService) uploadFileLegacy(ctx context.Context, key string, r io.Rea
 // resulting shards (keyed by "<key>/chunk_<N>/<shardHash>"), and accumulates
 // per-chunk metadata (with populated shard locations) onto the returned
 // ObjectMetadata.Chunks slice.
-func (s *FileService) uploadFileChunked(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string) (domain.ObjectMetadata, error) {
-	chunker, err := newChunker(chunkMethod, chunkSize, r)
+func (s *FileService) uploadFileChunked(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string, level int, windowSize int) (domain.ObjectMetadata, error) {
+	chunker, err := newChunker(chunkMethod, chunkSize, level, windowSize, r)
 	if err != nil {
 		return domain.ObjectMetadata{}, err
 	}
@@ -285,8 +289,9 @@ func (s *FileService) uploadFileChunked(ctx context.Context, key string, r io.Re
 // the total file size can be determined up front.
 //
 // For ChunkMethodEqualSplit, chunkSize is interpreted as the target number of
-// chunks. For ChunkMethodFixed it is the byte size of each chunk.
-func newChunker(chunkMethod string, chunkSize int64, r io.Reader) (chunking.Chunker, error) {
+// chunks. For ChunkMethodFixed it is the byte size of each chunk. For
+// ChunkMethodFastCDC it is the target average chunk size in bytes.
+func newChunker(chunkMethod string, chunkSize int64, level int, windowSize int, r io.Reader) (chunking.Chunker, error) {
 	switch chunkMethod {
 	case ChunkMethodFixed:
 		if chunkSize <= 0 {
@@ -302,6 +307,29 @@ func newChunker(chunkMethod string, chunkSize int64, r io.Reader) (chunking.Chun
 			return nil, fmt.Errorf("chunkSize (number of chunks) must be greater than 0 for %q chunking", ChunkMethodEqualSplit)
 		}
 		return chunking.NewEqualSplitChunker(int(chunkSize), total)
+	case ChunkMethodFastCDC:
+		// For FastCDC, chunkSize is interpreted as the target average chunk size in bytes.
+		// The FastCDC algorithm uses content-defined boundaries, so chunk sizes will
+		// vary between MinSize and MaxSize, averaging around TargetSize.
+		// FastCDC does not require a seekable reader as it streams content.
+		if chunkSize <= 0 {
+			return nil, fmt.Errorf("chunkSize must be greater than 0 for %q chunking", ChunkMethodFastCDC)
+		}
+		config := chunking.FastCDCConfig{
+			TargetSize: int(chunkSize),
+			MinSize:    int(chunkSize / 4), // Default: target/4
+			MaxSize:    int(chunkSize * 2), // Default: target*2 (per FastCDC paper)
+			Level:      level,
+			WindowSize: windowSize,
+		}
+		// Ensure minimum bounds
+		if config.MinSize < chunking.DefaultFastCDCMinSize {
+			config.MinSize = chunking.DefaultFastCDCMinSize
+		}
+		if config.MaxSize > chunking.DefaultFastCDCMaxSize {
+			config.MaxSize = chunking.DefaultFastCDCMaxSize
+		}
+		return chunking.NewFastCDCChunker(config)
 	default:
 		return nil, fmt.Errorf("unsupported chunk method: %q", chunkMethod)
 	}

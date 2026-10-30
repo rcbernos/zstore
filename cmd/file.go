@@ -13,6 +13,9 @@ import (
 
 var quiet bool
 
+var level int
+var windowSize int
+
 // parseZsURL parses a zs:// URL and returns the key
 func parseZsURL(zsURL string) (string, error) {
 	if !strings.HasPrefix(zsURL, "zs://") {
@@ -86,7 +89,9 @@ var uploadCmd = &cobra.Command{
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		chunkSize, _ := cmd.Flags().GetInt64("chunk-size")
 		chunkMethod, _ := cmd.Flags().GetString("chunk-method")
-		err = fileService.UploadFile(context.Background(), key, file, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod)
+		level, _ := cmd.Flags().GetInt("level")
+		windowSize, _ := cmd.Flags().GetInt("window-size")
+	err = fileService.UploadFile(context.Background(), key, file, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod, level, windowSize)
 		if err != nil {
 			fmt.Printf("Error uploading file: %v\n", err)
 			return
@@ -390,7 +395,9 @@ func init() {
 	uploadCmd.Flags().Int("parity-shards", 2, "Number of parity shards for erasure coding")
 	uploadCmd.Flags().Int("concurrency", 3, "Number of concurrent shard uploads")
 	uploadCmd.Flags().Int64("chunk-size", 16*1024*1024, "Target chunk size in bytes for chunked uploads")
-	uploadCmd.Flags().String("chunk-method", "none", "Chunking method: none, fixed, equal-split")
+	uploadCmd.Flags().String("chunk-method", "none", "Chunking method: none, fixed, equal-split, fastcdc")
+	uploadCmd.Flags().Int("level", 1, "FastCDC level (1=primary, 2=skip=2x, 3=skip=4x)")
+	uploadCmd.Flags().Int("window-size", 64, "Rolling hash window size in bytes (for fastcdc)")
 	uploadRawCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")
 	uploadRawCmd.Flags().String("region", "", "AWS region for S3 bucket (required for S3)")
 	downloadCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")

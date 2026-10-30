@@ -252,7 +252,7 @@ func TestUploadFile_Legacy_RoundTrip(t *testing.T) {
 	data := makeTestData(2048)
 	key := "unittest/legacy.bin"
 
-	if err := fileService.UploadFile(ctx, key, bytes.NewReader(data), true, 4, 2, 3, 0, "none"); err != nil {
+	if err := fileService.UploadFile(ctx, key, bytes.NewReader(data), true, 4, 2, 3, 0, "none", 1, 64); err != nil {
 		t.Fatalf("UploadFile failed: %v", err)
 	}
 
@@ -294,7 +294,7 @@ func TestUploadFileChunked_Fixed_RoundTrip(t *testing.T) {
 	key := "unittest/fixed.bin"
 	chunkSize := int64(500) // -> 5 chunks: 500,500,500,500,248
 
-	if err := fileService.UploadFileChunked(ctx, key, bytes.NewReader(data), true, 4, 2, 3, chunkSize, ChunkMethodFixed); err != nil {
+	if err := fileService.UploadFileChunked(ctx, key, bytes.NewReader(data), true, 4, 2, 3, chunkSize, ChunkMethodFixed, 1, 64); err != nil {
 		t.Fatalf("UploadFileChunked failed: %v", err)
 	}
 
@@ -348,7 +348,7 @@ func TestUploadFileChunked_EqualSplit_RoundTrip(t *testing.T) {
 	key := "unittest/equal.bin"
 	numChunks := int64(4) // chunkSize param reinterpreted as chunk count
 
-	if err := fileService.UploadFileChunked(ctx, key, bytes.NewReader(data), true, 4, 2, 3, numChunks, ChunkMethodEqualSplit); err != nil {
+	if err := fileService.UploadFileChunked(ctx, key, bytes.NewReader(data), true, 4, 2, 3, numChunks, ChunkMethodEqualSplit, 1, 64); err != nil {
 		t.Fatalf("UploadFileChunked failed: %v", err)
 	}
 
@@ -383,7 +383,7 @@ func TestUploadFileChunked_EqualSplit_RoundTrip(t *testing.T) {
 func TestUploadFileChunked_EmptyFile(t *testing.T) {
 	fileService, _ := newTestFileService(t)
 	ctx := context.Background()
-	err := fileService.UploadFileChunked(ctx, "unittest/empty.bin", bytes.NewReader(nil), true, 4, 2, 3, 500, ChunkMethodFixed)
+	err := fileService.UploadFileChunked(ctx, "unittest/empty.bin", bytes.NewReader(nil), true, 4, 2, 3, 500, ChunkMethodFixed, 1, 64)
 	if err == nil {
 		t.Fatal("expected error uploading empty file, got nil")
 	}
@@ -392,7 +392,7 @@ func TestUploadFileChunked_EmptyFile(t *testing.T) {
 func TestUploadFile_Legacy_EmptyFile(t *testing.T) {
 	fileService, _ := newTestFileService(t)
 	ctx := context.Background()
-	err := fileService.UploadFile(ctx, "unittest/empty-legacy.bin", bytes.NewReader(nil), true, 4, 2, 3, 0, "none")
+	err := fileService.UploadFile(ctx, "unittest/empty-legacy.bin", bytes.NewReader(nil), true, 4, 2, 3, 0, "none", 1, 64)
 	if err == nil {
 		t.Fatal("expected error uploading empty file via UploadFile, got nil")
 	}
@@ -401,7 +401,7 @@ func TestUploadFile_Legacy_EmptyFile(t *testing.T) {
 func TestUploadFileChunked_UnsupportedMethod(t *testing.T) {
 	fileService, _ := newTestFileService(t)
 	ctx := context.Background()
-	err := fileService.UploadFileChunked(ctx, "unittest/bogus.bin", bytes.NewReader(makeTestData(64)), true, 4, 2, 3, 500, "bogus")
+	err := fileService.UploadFileChunked(ctx, "unittest/bogus.bin", bytes.NewReader(makeTestData(64)), true, 4, 2, 3, 500, "bogus", 1, 64)
 	if err == nil {
 		t.Fatal("expected error for unsupported chunk method, got nil")
 	}
@@ -410,7 +410,7 @@ func TestUploadFileChunked_UnsupportedMethod(t *testing.T) {
 func TestUploadFileChunked_FixedInvalidChunkSize(t *testing.T) {
 	fileService, _ := newTestFileService(t)
 	ctx := context.Background()
-	err := fileService.UploadFileChunked(ctx, "unittest/bad-chunksize.bin", bytes.NewReader(makeTestData(64)), true, 4, 2, 3, 0, ChunkMethodFixed)
+	err := fileService.UploadFileChunked(ctx, "unittest/bad-chunksize.bin", bytes.NewReader(makeTestData(64)), true, 4, 2, 3, 0, ChunkMethodFixed, 1, 64)
 	if err == nil {
 		t.Fatal("expected error for chunkSize<=0 with fixed chunking, got nil")
 	}
@@ -425,7 +425,7 @@ func TestDownloadFile_Legacy(t *testing.T) {
 	key := "unittest/download-legacy.bin"
 
 	// Upload file
-	if err := fileService.UploadFile(ctx, key, bytes.NewReader(data), true, 4, 2, 3, 0, "none"); err != nil {
+	if err := fileService.UploadFile(ctx, key, bytes.NewReader(data), true, 4, 2, 3, 0, "none", 1, 64); err != nil {
 		t.Fatalf("UploadFile failed: %v", err)
 	}
 
@@ -461,7 +461,7 @@ func TestDownloadFile_Chunked(t *testing.T) {
 	key := "unittest/download-chunked.bin"
 
 	// Upload file with chunking
-	if err := fileService.UploadFileChunked(ctx, key, bytes.NewReader(data), true, 4, 2, 3, 500, ChunkMethodFixed); err != nil {
+	if err := fileService.UploadFileChunked(ctx, key, bytes.NewReader(data), true, 4, 2, 3, 500, ChunkMethodFixed, 1, 64); err != nil {
 		t.Fatalf("UploadFileChunked failed: %v", err)
 	}
 

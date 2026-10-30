@@ -33,7 +33,7 @@ import (
 // For chunked uploads each chunk's shards are stored under keys of the form
 // <prefix>/<filename>/chunk_<N>/<shardHash> and per-chunk metadata is recorded
 // on ObjectMetadata.Chunks.
-func (s *FileService) ChunkedUploadFile(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string) (domain.ObjectMetadata, error) {
+func (s *FileService) ChunkedUploadFile(ctx context.Context, key string, r io.Reader, quiet bool, dataShards, parityShards, concurrency int, chunkSize int64, chunkMethod string, level int, windowSize int) (domain.ObjectMetadata, error) {
 	start := time.Now()
 
 	if chunkMethod == "" {
@@ -66,7 +66,7 @@ func (s *FileService) ChunkedUploadFile(ctx context.Context, key string, r io.Re
 		m.ChunkMethod = ChunkMethodNone
 		metadata = m
 	default:
-		m, uploadErr := s.uploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod)
+		m, uploadErr := s.uploadFileChunked(ctx, key, r, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod, level, windowSize)
 		if uploadErr != nil {
 			return domain.ObjectMetadata{}, uploadErr
 		}

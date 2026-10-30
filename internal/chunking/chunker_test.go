@@ -2,6 +2,7 @@ package chunking
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"testing"
 )
@@ -740,9 +741,10 @@ func TestChunker_DataIntegrity(t *testing.T) {
 // Interface compliance tests
 
 func TestChunker_InterfaceCompliance(t *testing.T) {
-	// Verify that both chunkers implement the Chunker interface
+	// Verify that all chunkers implement the Chunker interface
 	var _ Chunker = (*FixedChunker)(nil)
 	var _ Chunker = (*EqualSplitChunker)(nil)
+	var _ Chunker = (*FastCDCChunker)(nil)
 }
 
 func TestChunker_ChunkOrder(t *testing.T) {
@@ -801,4 +803,382 @@ func TestChunker_ChunkOrder(t *testing.T) {
 			expectedIndex++
 		}
 	})
+	t.Run("FastCDCChunker order", func(t *testing.T) {
+		chunker, err := NewFastCDCChunker(FastCDCConfig{
+			TargetSize: 10,
+			MinSize:    5,
+			MaxSize:    20,
+		})
+		if err != nil {
+			t.Fatalf("Failed to create FastCDCChunker: %v", err)
+		}
+
+		reader := newReader(makeTestData(fileSize))
+
+		expectedIndex := 0
+		for {
+			chunk, err := chunker.NextChunk(reader)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if chunk.Index != expectedIndex {
+				t.Errorf("Wrong order: expected index %d, got %d", expectedIndex, chunk.Index)
+			}
+
+			expectedIndex++
+		}
+	})
+}
+
+// FastCDCChunker tests
+
+func TestFastCDCChunker_BasicChunking(t *testing.T) {
+	// Test basic chunking with FastCDC
+	config := FastCDCConfig{
+		TargetSize: 1024,
+		MinSize:    256,
+		MaxSize:    4096,
+	}
+	chunker, err := NewFastCDCChunker(config)
+	if err != nil {
+		t.Fatalf("Failed to create FastCDCChunker: %v", err)
+	}
+
+	// Test with 10KB of data
+	data := makeTestData(10 * 1024)
+	reader := newReader(data)
+
+	var chunks []*Chunk
+	for {
+		chunk, err := chunker.NextChunk(reader)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		chunks = append(chunks, chunk)
+	}
+
+	if len(chunks) == 0 {
+		t.Fatal("Expected at least one chunk")
+	}
+
+	// Verify all chunks are within min/max bounds (except possibly last)
+	for i, chunk := range chunks {
+		if i != len(chunks)-1 {
+			if len(chunk.Data) < config.MinSize {
+				t.Errorf("Chunk %d below min size: %d < %d", chunk.Index, len(chunk.Data), config.MinSize)
+			}
+		}
+		if len(chunk.Data) > config.MaxSize {
+			t.Errorf("Chunk %d exceeds max size: %d > %d", chunk.Index, len(chunk.Data), config.MaxSize)
+		}
+	}
+}
+
+func TestFastCDCChunker_EmptyFile(t *testing.T) {
+	config := FastCDCConfig{
+		TargetSize: 1024,
+		MinSize:    256,
+		MaxSize:    4096,
+	}
+	chunker, err := NewFastCDCChunker(config)
+	if err != nil {
+		t.Fatalf("Failed to create FastCDCChunker: %v", err)
+	}
+
+	reader := newReader([]byte{})
+
+	chunk, err := chunker.NextChunk(reader)
+	if err != io.EOF {
+		t.Errorf("Expected io.EOF for empty file, got err=%v, chunk=%v", err, chunk)
+	}
+}
+
+func TestFastCDCChunker_InvalidConfig(t *testing.T) {
+	testCases := []struct {
+		name   string
+		config FastCDCConfig
+	}{
+		{
+			name: "minSize > targetSize",
+			config: FastCDCConfig{
+				TargetSize: 100,
+				MinSize:    200,
+				MaxSize:    400,
+			},
+		},
+		{
+			name: "maxSize < targetSize",
+			config: FastCDCConfig{
+				TargetSize: 100,
+				MinSize:    50,
+				MaxSize:    80,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewFastCDCChunker(tc.config)
+			if err == nil {
+				t.Errorf("Expected error for invalid config, got nil")
+			}
+		})
+	}
+}
+
+func TestFastCDCChunker_Deterministic(t *testing.T) {
+	// Same input should produce same chunk boundaries
+	config := FastCDCConfig{
+		TargetSize: 512,
+		MinSize:    128,
+		MaxSize:    2048,
+	}
+
+	data := makeTestData(4096)
+
+	// First pass
+	chunker1, _ := NewFastCDCChunker(config)
+	reader1 := newReader(data)
+	var boundaries1 []int
+	for {
+		chunk, err := chunker1.NextChunk(reader1)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		boundaries1 = append(boundaries1, len(chunk.Data))
+	}
+
+	// Second pass
+	chunker2, _ := NewFastCDCChunker(config)
+	reader2 := newReader(data)
+	var boundaries2 []int
+	for {
+		chunk, err := chunker2.NextChunk(reader2)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		boundaries2 = append(boundaries2, len(chunk.Data))
+	}
+
+	if len(boundaries1) != len(boundaries2) {
+		t.Errorf("Chunk count differs: %d != %d", len(boundaries1), len(boundaries2))
+	}
+
+	for i := range boundaries1 {
+		if boundaries1[i] != boundaries2[i] {
+			t.Errorf("Chunk boundaries differ at index %d: %d != %d", i, boundaries1[i], boundaries2[i])
+		}
+	}
+}
+
+func TestFastCDCChunker_ClosedChunker(t *testing.T) {
+	config := FastCDCConfig{
+		TargetSize: 1024,
+		MinSize:    128,
+	}
+	chunker, err := NewFastCDCChunker(config)
+	if err != nil {
+		t.Fatalf("Failed to create FastCDCChunker: %v", err)
+	}
+
+	chunker.Close()
+
+	_, err = chunker.NextChunk(newReader([]byte("test")))
+	if err != ErrChunkerClosed {
+		t.Errorf("Expected ErrChunkerClosed, got: %v", err)
+	}
+}
+
+func TestFastCDCChunker_Reset(t *testing.T) {
+	config := FastCDCConfig{
+		TargetSize: 1000,
+		MinSize:    100,
+	}
+	chunker, err := NewFastCDCChunker(config)
+	if err != nil {
+		t.Fatalf("Failed to create FastCDCChunker: %v", err)
+	}
+
+	data := makeTestData(5000)
+	reader := newReader(data)
+
+	// First pass - get some chunks
+	chunkCount1 := 0
+	for {
+		_, err := chunker.NextChunk(reader)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunkCount1++
+		if chunkCount1 >= 3 {
+			break
+		}
+	}
+
+	// Reset and verify we can start fresh
+	chunker.Reset()
+	reader = newReader(data)
+
+	chunkCount2 := 0
+	for {
+		chunk, err := chunker.NextChunk(reader)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chunk.Index != chunkCount2 {
+			t.Errorf("Expected index %d, got %d", chunkCount2, chunk.Index)
+		}
+		chunkCount2++
+	}
+
+	if chunkCount2 == 0 {
+		t.Error("No chunks returned after reset")
+	}
+}
+
+func TestFastCDC_ByLevel(t *testing.T) {
+	// Test that different levels use the same mask and different skip factors
+	// Per FastCDC paper:
+	//   - Level 1: Check every position after minSize (skip factor = 1)
+	//   - Level 2: Check every 2nd position after minSize (skip factor = 2)
+	//   - Level 3: Check every 4th position after minSize (skip factor = 4)
+	testCases := []struct {
+		name        string
+		level       int
+		targetSize int
+		expectedK   int // expected k value (mask = 2^k - 1), where k = floor(log2(target_size))
+		expectedSkip int // expected skip factor
+	}{
+		{"Level1_8KB", 1, 8192, 13, 1},   // 2^13 = 8192, skip=1 (check every pos)
+		{"Level2_8KB", 2, 8192, 13, 2},   // 2^13 = 8192, skip=2 (check every 2nd pos)
+		{"Level3_8KB", 3, 8192, 13, 4},   // 2^13 = 8192, skip=4 (check every 4th pos)
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := FastCDCConfig{
+				TargetSize: tc.targetSize,
+				Level:      tc.level,
+			}
+			chunker, err := NewFastCDCChunker(config)
+			if err != nil {
+				t.Fatalf("Failed to create FastCDCChunker: %v", err)
+			}
+
+			// Check that level is stored correctly
+			if chunker.level != tc.level {
+				t.Errorf("Expected level %d, got %d", tc.level, chunker.level)
+			}
+
+			// Check skip factor is calculated correctly
+			if chunker.skipFactor != tc.expectedSkip {
+				t.Errorf("Expected skip factor %d, got %d", tc.expectedSkip, chunker.skipFactor)
+			}
+
+			// Check mask is calculated correctly
+			// mask = (1 << k) - 1, where k = floor(log2(target_size))
+			// Level does NOT affect the mask per the FastCDC paper
+			expectedMask := uint32((1 << uint(tc.expectedK)) - 1)
+			if chunker.mask != expectedMask {
+				t.Errorf("Expected mask %d, got %d", expectedMask, chunker.mask)
+			}
+		})
+	}
+}
+
+func TestFastCDC_LevelValidation(t *testing.T) {
+	testCases := []struct {
+		name  string
+		level int
+	}{
+		{"Level1", 1},
+		{"Level2", 2},
+		{"Level3", 3},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := FastCDCConfig{
+				TargetSize: 8192,
+				Level:      tc.level,
+			}
+			chunker, err := NewFastCDCChunker(config)
+			if err != nil {
+				t.Fatalf("Failed to create FastCDCChunker: %v", err)
+			}
+			if chunker.level != tc.level {
+				t.Errorf("Expected level %d, got %d", tc.level, chunker.level)
+			}
+		})
+	}
+
+	// Invalid levels should fail (Level must be 1, 2, or 3; 0 is treated as default)
+	invalidLevels := []int{-1, 4, 100}
+	for _, level := range invalidLevels {
+		t.Run(fmt.Sprintf("InvalidLevel_%d", level), func(t *testing.T) {
+			config := FastCDCConfig{
+				TargetSize: 8192,
+				Level:      level,
+			}
+			_, err := NewFastCDCChunker(config)
+			if err == nil {
+				t.Error("Expected error for invalid level")
+			}
+		})
+	}
+}
+
+func TestFastCDC_WindowSize(t *testing.T) {
+	testCases := []struct {
+		name       string
+		windowSize int
+	}{
+		{"Default", 0},
+		{"Small", 32},
+		{"Normal", 64},
+		{"Large", 128},
+		{"TooSmall", 16},
+		{"TooBig", 512},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := FastCDCConfig{
+				TargetSize: 8192,
+				WindowSize: tc.windowSize,
+			}
+			chunker, err := NewFastCDCChunker(config)
+			if err != nil {
+				t.Fatalf("Failed to create FastCDCChunker: %v", err)
+			}
+
+			expectedSize := tc.windowSize
+			if expectedSize < 32 || expectedSize > 256 {
+				expectedSize = DefaultFastCDCWindowSize
+			}
+
+			if chunker.gearHash.size != expectedSize {
+				t.Errorf("Expected window size %d, got %d", expectedSize, chunker.gearHash.size)
+			}
+		})
+	}
 }

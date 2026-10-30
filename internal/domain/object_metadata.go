@@ -54,7 +54,7 @@ type ObjectMetadata struct {
 	// Chunks contains metadata for each chunk's shards
 	Chunks []ChunkMetadata `json:"chunks" dynamodbav:"chunks"`
 
-	// ChunkMethod indicates the chunking strategy used ("none", "fixed", "equal-split")
+	// ChunkMethod indicates the chunking strategy used ("none", "fixed", "equal-split", "fastcdc")
 	ChunkMethod string `json:"chunk_method" dynamodbav:"chunk_method"`
 }
 
