@@ -130,13 +130,37 @@ For large files, use chunking to reduce memory usage during upload:
 
 # Upload with equal-split chunking (divides file evenly across all chunks)
 ./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=16777216 --chunk-method=equal-split
+
+# Upload with FastCDC chunking (content-defined for deduplication)
+./zstore upload /path/to/file.zip zs://my-bucket/file.zip --chunk-method=fastcdc --chunk-size=8192
+
+# FastCDC with level 2 (2x faster boundary detection)
+./zstore upload /path/to/large.tar.gz zs://my-bucket/large.tar.gz --chunk-method=fastcdc --chunk-size=16384 --level=2
 ```
 
-**Chunking options for uploads:**
-- `--chunk-size`: Target size for each chunk in bytes (default: 16777216 = 16MB). When specified, chunking is automatically enabled with `--chunk-method=fixed`.
-- `--chunk-method`: Chunking strategy - `none` (disabled), `fixed` (fixed size chunks, used by default when `--chunk-size` is set), or `equal-split` (evenly distributed chunks)
+**FastCDC Content-Defined Chunking:**
 
-> **Note:** Chunking reduces memory usage for large files but may result in more API calls for shards.
+FastCDC (Fast Content-Defined Chunking) uses content-defined boundaries based on the Gear rolling hash algorithm to enable **deduplication** - identical content produces identical chunks regardless of file alignment.
+
+**FastCDC Settings:**
+- **Default target size**: 8KB (smaller than fixed's 16MB default)
+- **Min size**: 2KB, **Max size**: 16KB (per FastCDC paper recommendations)
+- **Level 1** (default): Checks every position after minSize for primary boundaries
+- **Level 2**: Skip 2x positions (faster, larger chunks)
+- **Level 3**: Skip 4x positions (fastest, largest chunks)
+
+**When to use FastCDC:**
+- Deduplication scenarios where identical content appears across files
+- Memory-constrained environments (smaller default chunks)
+- Backup/restore workflows where content reuse is expected
+
+**Chunking options for uploads:**
+- `--chunk-size`: Target size for each chunk in bytes (default: 16777216 = 16MB for fixed/equal-split, 8192 for fastcdc). When specified with `--chunk-method=fastcdc`, this is the target average chunk size.
+- `--chunk-method`: Chunking strategy - `none` (disabled), `fixed` (fixed size chunks, default when `--chunk-size` is set), `equal-split` (evenly distributed chunks), or `fastcdc` (content-defined chunks for deduplication)
+- `--level`: FastCDC level (default: 1; 1=primary, 2=skip 2x, 3=skip 4x). Only for `--chunk-method=fastcdc`
+- `--window-size`: Rolling hash window size for FastCDC (default: 64). Only for `--chunk-method=fastcdc`
+
+> **Note:** Chunking reduces memory usage for large files but may result in more API calls for shards. For FastCDC, smaller chunk sizes (e.g., 8192) provide better deduplication but may increase API calls.
 
 **Upload Raw Files (without erasure coding)**
 ```bash
@@ -228,8 +252,10 @@ For large files that were uploaded with chunking, you can enable chunked downloa
 - `--data-shards`: Number of data shards for erasure coding (default: 4)
 - `--parity-shards`: Number of parity shards for erasure coding (default: 2)
 - `--concurrency`: Number of concurrent shard uploads (default: 3)
-- `--chunk-size`: Target chunk size in bytes for chunked uploads (default: 16777216 = 16MB). When specified, enables chunking automatically.
-- `--chunk-method`: Chunking strategy for uploads: `none` (disabled), `fixed` (default when `--chunk-size` is set), `equal-split` (default: none)
+- `--chunk-size`: Target chunk size in bytes for chunked uploads. For fixed/equal-split: default 16777216 bytes (16 MB). For fastcdc: default 8192 bytes (8 KB). When specified, enables chunking with default method.
+- `--chunk-method`: Chunking strategy for uploads: `none` (disabled), `fixed` (default when `--chunk-size` is set), `equal-split` (evenly distributed chunks), or `fastcdc` (content-defined chunks for deduplication)
+- `--level`: FastCDC level (default: 1; 1=primary boundaries, 2=skip 2x, 3=skip 4x). Only for `--chunk-method=fastcdc`
+- `--window-size`: Rolling hash window size in bytes for FastCDC (default: 64). Only for `--chunk-method=fastcdc`
 
 ### Download Options
 - `--concurrency`: Number of concurrent shard downloads (default: 3)
@@ -292,6 +318,12 @@ Zstore automatically distributes shards across all configured buckets using roun
 - **Configurable shards**: Choose data and parity shard counts
 - **Automatic reconstruction** from available shards
 - **Integrity verification** using CRC64 hashes
+
+### Chunking
+- **Multiple chunking strategies**: fixed, equal-split, and fastcdc
+- **FastCDC**: Content-defined chunking for deduplication (same content → same chunks)
+- **Memory-efficient**: Chunking reduces memory usage for large file processing
+- **Configurable chunk sizes**: Match chunk size to your content and network characteristics
 
 ### Multi-Provider Storage
 - **Cross-cloud distribution** (mix S3 and GCS)
