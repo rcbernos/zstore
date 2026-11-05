@@ -239,80 +239,14 @@ func TestFixedChunker_SetTotalChunks(t *testing.T) {
 	}
 }
 
-// Tests for EqualSplitChunker
+// Tests for EqualSplitChunker (ESC - Equal Split Chunking with max chunk size)
 
-func TestEqualSplitChunker_NChunks(t *testing.T) {
-	// Test 10MB file split into 4 chunks
-	fileSize := int64(10 * 1024 * 1024) // 10MB
-	totalChunks := 4
-
-	chunker, err := NewEqualSplitChunker(totalChunks, fileSize)
-	if err != nil {
-		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
-	}
-
-	expectedChunkSize := fileSize / int64(totalChunks)
-
-	reader := newReader(makeTestData(fileSize))
-
-	for i := 0; i < totalChunks; i++ {
-		chunk, err := chunker.NextChunk(reader)
-		if err != nil {
-			t.Fatalf("Unexpected error on chunk %d: %v", i, err)
-		}
-
-		if chunk.Index != i {
-			t.Errorf("Expected chunk index %d, got %d", i, chunk.Index)
-		}
-
-		if int64(len(chunk.Data)) != expectedChunkSize {
-			t.Errorf("Chunk %d: expected size %d, got %d", i, expectedChunkSize, len(chunk.Data))
-		}
-	}
-
-	_, err = chunker.NextChunk(reader)
-	if err != io.EOF {
-		t.Errorf("Expected io.EOF after all chunks, got %v", err)
-	}
-}
-
-func TestEqualSplitChunker_NotEvenlyDivisible(t *testing.T) {
-	// Test file size not evenly divisible by number of chunks
-	// 10 bytes into 3 chunks: 4 + 3 + 3 = 10
-	fileSize := int64(10)
-	totalChunks := 3
-
-	chunker, err := NewEqualSplitChunker(totalChunks, fileSize)
-	if err != nil {
-		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
-	}
-
-	reader := newReader(makeTestData(fileSize))
-
-	expectedSizes := []int64{4, 3, 3} // 10 / 3 = 3 base, 10 % 3 = 1 remainder
-
-	for i := 0; i < totalChunks; i++ {
-		chunk, err := chunker.NextChunk(reader)
-		if err != nil {
-			t.Fatalf("Unexpected error on chunk %d: %v", i, err)
-		}
-
-		if int64(len(chunk.Data)) != expectedSizes[i] {
-			t.Errorf("Chunk %d: expected size %d, got %d", i, expectedSizes[i], len(chunk.Data))
-		}
-	}
-
-	_, err = chunker.NextChunk(reader)
-	if err != io.EOF {
-		t.Errorf("Expected io.EOF after all chunks, got %v", err)
-	}
-}
-
-func TestEqualSplitChunker_SingleChunk(t *testing.T) {
+func TestEqualSplitChunker_MaxChunkSize(t *testing.T) {
+	// Test file size under max chunk size -> should produce 1 chunk
 	fileSize := int64(1000)
-	totalChunks := 1
+	maxChunkSize := int64(1024)
 
-	chunker, err := NewEqualSplitChunker(totalChunks, fileSize)
+	chunker, err := NewEqualSplitChunker(maxChunkSize, fileSize)
 	if err != nil {
 		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 	}
@@ -338,44 +272,110 @@ func TestEqualSplitChunker_SingleChunk(t *testing.T) {
 	}
 }
 
-func TestEqualSplitChunker_TotalChunksExceedsFileSize(t *testing.T) {
-	fileSize := int64(5)
-	totalChunks := 10
+func TestEqualSplitChunker_DivideEvenly(t *testing.T) {
+	// Test 10MB file with max 4MB chunks -> should produce 3 chunks (4MB, 4MB, 2MB)
+	// but with equal distribution: 4MB, 3MB, 3MB (as evenly as possible)
+	fileSize := int64(10 * 1024 * 1024)    // 10MB
+	maxChunkSize := int64(4 * 1024 * 1024) // 4MB max
 
-	chunker, err := NewEqualSplitChunker(totalChunks, fileSize)
+	chunker, err := NewEqualSplitChunker(maxChunkSize, fileSize)
+	if err != nil {
+		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
+	}
+
+	// Test 10MB file with max 4MB chunks -> ceil(10MB/4MB) = 3 chunks
+	// 10MB / 3 = 3495253 base bytes, 10MB % 3 = 1 remainder
+	expectedSizes := []int64{3495254, 3495253, 3495253}
+
+	reader := newReader(makeTestData(fileSize))
+
+	for i := 0; i < len(expectedSizes); i++ {
+		chunk, err := chunker.NextChunk(reader)
+		if err != nil {
+			t.Fatalf("Unexpected error on chunk %d: %v", i, err)
+		}
+
+		if chunk.Index != i {
+			t.Errorf("Expected chunk index %d, got %d", i, chunk.Index)
+		}
+
+		if int64(len(chunk.Data)) != expectedSizes[i] {
+			t.Errorf("Chunk %d: expected size %d, got %d", i, expectedSizes[i], len(chunk.Data))
+		}
+	}
+
+	_, err = chunker.NextChunk(reader)
+	if err != io.EOF {
+		t.Errorf("Expected io.EOF after all chunks, got %v", err)
+	}
+}
+
+func TestEqualSplitChunker_NotEvenlyDivisible(t *testing.T) {
+	// Test file size not evenly divisible by max chunk size
+	// 10 bytes with max 4MB -> ceil(10/4) = 1 chunk = 10 bytes
+	// For ESC: need to distribute 10 bytes as evenly as possible
+	fileSize := int64(10)
+	maxChunkSize := int64(4 * 1024 * 1024) // 4MB max (much larger than file)
+
+	chunker, err := NewEqualSplitChunker(maxChunkSize, fileSize)
 	if err != nil {
 		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 	}
 
 	reader := newReader(makeTestData(fileSize))
 
-	actualChunks := 0
-	for {
-		chunk, err := chunker.NextChunk(reader)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
-		}
-		actualChunks++
-
-		if len(chunk.Data) == 0 {
-			t.Error("Expected non-empty chunk")
-		}
+	// With max 4MB, 10 bytes fits in 1 chunk
+	chunk, err := chunker.NextChunk(reader)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	if actualChunks != int(fileSize) {
-		t.Errorf("Expected %d chunks for %d bytes with 10 requested, got %d",
-			fileSize, totalChunks, actualChunks)
+	if int64(len(chunk.Data)) != fileSize {
+		t.Errorf("Expected chunk size %d, got %d", fileSize, len(chunk.Data))
+	}
+
+	_, err = chunker.NextChunk(reader)
+	if err != io.EOF {
+		t.Errorf("Expected io.EOF after single chunk, got %v", err)
+	}
+}
+
+func TestEqualSplitChunker_SingleChunk(t *testing.T) {
+	// File smaller than max chunk size
+	fileSize := int64(1000)
+	maxChunkSize := int64(2048)
+
+	chunker, err := NewEqualSplitChunker(maxChunkSize, fileSize)
+	if err != nil {
+		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
+	}
+
+	reader := newReader(makeTestData(fileSize))
+
+	chunk, err := chunker.NextChunk(reader)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if chunk.Index != 0 {
+		t.Errorf("Expected chunk index 0, got %d", chunk.Index)
+	}
+
+	if int64(len(chunk.Data)) != fileSize {
+		t.Errorf("Expected chunk size %d, got %d", fileSize, len(chunk.Data))
+	}
+
+	_, err = chunker.NextChunk(reader)
+	if err != io.EOF {
+		t.Errorf("Expected io.EOF after single chunk, got %v", err)
 	}
 }
 
 func TestEqualSplitChunker_EmptyFile(t *testing.T) {
 	fileSize := int64(0)
-	totalChunks := 4
+	maxChunkSize := int64(100)
 
-	chunker, err := NewEqualSplitChunker(totalChunks, fileSize)
+	chunker, err := NewEqualSplitChunker(maxChunkSize, fileSize)
 	if err != nil {
 		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 	}
@@ -392,42 +392,42 @@ func TestEqualSplitChunker_EmptyFile(t *testing.T) {
 	}
 }
 
-func TestEqualSplitChunker_InvalidChunkCount(t *testing.T) {
+func TestEqualSplitChunker_InvalidMaxChunkSize(t *testing.T) {
 	testCases := []struct {
-		name        string
-		totalChunks int
-		fileSize    int64
+		name         string
+		maxChunkSize int64
+		fileSize     int64
 	}{
-		{"zero chunks", 0, 100},
-		{"negative chunks", -1, 100},
+		{"zero chunk size", 0, 100},
+		{"negative chunk size", -1, 100},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewEqualSplitChunker(tc.totalChunks, tc.fileSize)
-			if err != ErrInvalidChunkCount {
-				t.Errorf("Expected ErrInvalidChunkCount, got %v", err)
+			_, err := NewEqualSplitChunker(tc.maxChunkSize, tc.fileSize)
+			if err != ErrInvalidMaxChunkSize {
+				t.Errorf("Expected ErrInvalidMaxChunkSize, got %v", err)
 			}
 		})
 	}
 }
 
 func TestEqualSplitChunker_InvalidFileSize(t *testing.T) {
-	_, err := NewEqualSplitChunker(4, -1)
+	_, err := NewEqualSplitChunker(100, -1)
 	if err != ErrInvalidFileSize {
 		t.Errorf("Expected ErrInvalidFileSize, got %v", err)
 	}
 }
 
 func TestEqualSplitChunker_ClosedChunker(t *testing.T) {
-	chunker, err := NewEqualSplitChunker(4, 100)
+	chunker, err := NewEqualSplitChunker(100, 1000)
 	if err != nil {
 		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 	}
 
 	chunker.Close()
 
-	reader := newReader(makeTestData(100))
+	reader := newReader(makeTestData(1000))
 	_, err = chunker.NextChunk(reader)
 	if err != ErrChunkerClosed {
 		t.Errorf("Expected ErrChunkerClosed, got %v", err)
@@ -436,9 +436,9 @@ func TestEqualSplitChunker_ClosedChunker(t *testing.T) {
 
 func TestEqualSplitChunker_Reset(t *testing.T) {
 	fileSize := int64(100)
-	totalChunks := 4
+	maxChunkSize := int64(50)
 
-	chunker, err := NewEqualSplitChunker(totalChunks, fileSize)
+	chunker, err := NewEqualSplitChunker(maxChunkSize, fileSize)
 	if err != nil {
 		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 	}
@@ -478,14 +478,14 @@ func TestEqualSplitChunker_Reset(t *testing.T) {
 }
 
 func TestEqualSplitChunker_Close(t *testing.T) {
-	chunker, err := NewEqualSplitChunker(4, 100)
+	chunker, err := NewEqualSplitChunker(100, 1000)
 	if err != nil {
 		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 	}
 
 	chunker.Close()
 
-	reader := newReader(makeTestData(100))
+	reader := newReader(makeTestData(1000))
 	_, err = chunker.NextChunk(reader)
 	if err != ErrChunkerClosed {
 		t.Errorf("Expected ErrChunkerClosed, got %v", err)
@@ -495,19 +495,20 @@ func TestEqualSplitChunker_Close(t *testing.T) {
 func TestEqualSplitChunker_TotalChunksEstimate(t *testing.T) {
 	testCases := []struct {
 		name           string
-		totalChunks    int
+		maxChunkSize   int64
 		fileSize       int64
 		testFileSize   int64
 		expectedChunks int
 	}{
-		{"empty file", 4, 0, 0, 0},
-		{"exact multiple", 4, 100, 100, 4},
-		{"not evenly divisible", 3, 10, 10, 3},
+		{"empty file", 100, 0, 0, 0},
+		{"exact multiple", 100, 100, 200, 2},
+		{"not evenly divisible", 100, 10, 25, 1},
+		{"large file", 1024 * 1024, 10 * 1024 * 1024, 10 * 1024 * 1024, 10},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			chunker, err := NewEqualSplitChunker(tc.totalChunks, tc.fileSize)
+			chunker, err := NewEqualSplitChunker(tc.maxChunkSize, tc.fileSize)
 			if err != nil {
 				t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 			}
@@ -521,21 +522,31 @@ func TestEqualSplitChunker_TotalChunksEstimate(t *testing.T) {
 }
 
 func TestEqualSplitChunker_SetTotalChunks(t *testing.T) {
+	// File size is 100 bytes, originally with max chunk size 50 -> 2 chunks
 	fileSize := int64(100)
-	totalChunks := 4
+	maxChunkSize := int64(50)
 
-	chunker, err := NewEqualSplitChunker(totalChunks, fileSize)
+	chunker, err := NewEqualSplitChunker(maxChunkSize, fileSize)
 	if err != nil {
 		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 	}
 
-	err = chunker.SetTotalChunks(2)
+	// Change max chunk size to 25 -> should have 4 chunks (100/25 = 4)
+	err = chunker.SetTotalChunks(25)
 	if err != nil {
 		t.Fatalf("Unexpected error from SetTotalChunks: %v", err)
 	}
 
-	if chunker.totalChunks != 2 {
-		t.Errorf("Expected totalChunks to be 2, got %d", chunker.totalChunks)
+	// Verify the chunk sizes are recalculated
+	// 100 / 4 = 25, 100 % 4 = 0, so all chunks should be 25 bytes
+	if len(chunker.chunkSizes) != 4 {
+		t.Errorf("Expected 4 chunks, got %d", len(chunker.chunkSizes))
+	}
+
+	for i, size := range chunker.chunkSizes {
+		if size != 25 {
+			t.Errorf("Chunk %d: expected size 25, got %d", i, size)
+		}
 	}
 
 	if chunker.chunkIndex != 0 {
@@ -548,14 +559,14 @@ func TestEqualSplitChunker_SetTotalChunks(t *testing.T) {
 }
 
 func TestEqualSplitChunker_SetTotalChunks_Invalid(t *testing.T) {
-	chunker, err := NewEqualSplitChunker(4, 100)
+	chunker, err := NewEqualSplitChunker(100, 1000)
 	if err != nil {
 		t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 	}
 
 	testCases := []struct {
-		name        string
-		totalChunks int
+		name            string
+		newMaxChunkSize int
 	}{
 		{"zero total", 0},
 		{"negative total", -5},
@@ -563,9 +574,9 @@ func TestEqualSplitChunker_SetTotalChunks_Invalid(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := chunker.SetTotalChunks(tc.totalChunks)
-			if err != ErrInvalidChunkCount {
-				t.Errorf("Expected ErrInvalidChunkCount, got %v", err)
+			err := chunker.SetTotalChunks(tc.newMaxChunkSize)
+			if err != ErrInvalidMaxChunkSize {
+				t.Errorf("Expected ErrInvalidMaxChunkSize, got %v", err)
 			}
 		})
 	}
@@ -598,22 +609,20 @@ func TestChunker_VerySmallFiles(t *testing.T) {
 
 	t.Run("EqualSplitChunker tiny file", func(t *testing.T) {
 		for size := int64(1); size <= 2; size++ {
-			chunker, err := NewEqualSplitChunker(int(size), size)
+			chunker, err := NewEqualSplitChunker(size, size)
 			if err != nil {
 				t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 			}
 
 			reader := newReader(makeTestData(size))
 
-			for i := 0; i < int(size); i++ {
-				chunk, err := chunker.NextChunk(reader)
-				if err != nil {
-					t.Fatalf("Unexpected error: %v", err)
-				}
+			chunk, err := chunker.NextChunk(reader)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
 
-				if int64(len(chunk.Data)) != 1 {
-					t.Errorf("Expected chunk size 1, got %d", len(chunk.Data))
-				}
+			if int64(len(chunk.Data)) != size {
+				t.Errorf("Expected chunk size %d, got %d", size, len(chunk.Data))
 			}
 		}
 	})
@@ -707,9 +716,9 @@ func TestChunker_DataIntegrity(t *testing.T) {
 	})
 
 	t.Run("EqualSplitChunker data integrity", func(t *testing.T) {
-		totalChunks := 4
+		maxChunkSize := int64(25)
 
-		chunker, err := NewEqualSplitChunker(totalChunks, fileSize)
+		chunker, err := NewEqualSplitChunker(maxChunkSize, fileSize)
 		if err != nil {
 			t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 		}
@@ -777,7 +786,9 @@ func TestChunker_ChunkOrder(t *testing.T) {
 	})
 
 	t.Run("EqualSplitChunker order", func(t *testing.T) {
-		chunker, err := NewEqualSplitChunker(5, fileSize)
+		maxChunkSize := int64(25)
+
+		chunker, err := NewEqualSplitChunker(maxChunkSize, fileSize)
 		if err != nil {
 			t.Fatalf("Failed to create EqualSplitChunker: %v", err)
 		}

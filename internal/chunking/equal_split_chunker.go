@@ -8,32 +8,32 @@ import (
 
 // Sentinel errors specific to EqualSplitChunker construction.
 var (
-	// ErrInvalidChunkCount is returned when an invalid total chunk count is
+	// ErrInvalidMaxChunkSize is returned when an invalid max chunk size is
 	// specified (i.e. less than or equal to zero).
-	ErrInvalidChunkCount = errors.New("invalid chunk count: must be greater than 0")
+	ErrInvalidMaxChunkSize = errors.New("invalid max chunk size: must be greater than 0")
 
 	// ErrInvalidFileSize is returned when a negative file size is specified.
 	ErrInvalidFileSize = errors.New("invalid file size: must be non-negative")
 )
 
-// EqualSplitChunker implements a secondary chunking strategy that divides a
-// file into a specified number of roughly equal-sized chunks.
+// EqualSplitChunker implements Equal-Split Chunking (ESC), a secondary chunking
+// strategy that divides files into equally-sized chunks with a maximum byte size.
 //
-// Unlike FixedChunker which accepts a chunk size, EqualSplitChunker accepts
-// the total number of desired chunks and the file size, pre-calculating the
-// chunk boundaries at construction time. This is useful when the number of
-// output chunks needs to be controlled — for example, to match the number of
-// erasure-coding shards or downstream processing workers.
+// Unlike FixedChunker which creates chunks of max size with a smaller remainder,
+// EqualSplitChunker distributes bytes as evenly as possible across all chunks,
+// ensuring no two chunks differ by more than 1 byte.
 //
-// The first (fileSize % totalChunks) chunks will be one byte larger than the
-// remaining chunks to distribute the remainder as evenly as possible. Any
-// zero-size chunks that would result when totalChunks exceeds fileSize are
-// omitted, so the actual number of chunks returned may be fewer than
-// totalChunks.
+// The algorithm:
+// 1. Sets a maximum chunk size in bytes
+// 2. Determines the minimum number of chunks needed so all chunks fit under max size
+// 3. Distributes bytes evenly across chunks (max 1 byte difference between chunks)
 //
-// Example:
+// This produces balanced chunk sizes unlike Fixed-Length Chunking which can have
+// one very small remainder chunk.
 //
-//	chunker, err := NewEqualSplitChunker(4, 10*1024*1024) // 4 chunks of 10MB file
+// Example with maxChunkSize=4MB, fileSize=10MB:
+//
+//	chunker, err := NewEqualSplitChunker(4*1024*1024, 10*1024*1024)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -48,16 +48,18 @@ var (
 //	    // Process chunk (shard, upload, etc.)
 //	}
 type EqualSplitChunker struct {
-	// totalChunks is the original number of chunks requested by the caller.
-	// It may differ from len(chunkSizes) when zero-size chunks are omitted.
-	totalChunks int
+	// maxChunkSize is the maximum allowed size for each chunk.
+	maxChunkSize int64
+
+	// numChunks is the calculated number of chunks (derived from fileSize and maxChunkSize).
+	numChunks int
 
 	// chunkIndex is the zero-based index of the next chunk to be returned.
 	chunkIndex int
 
 	// chunkSizes holds the pre-calculated byte size of each chunk to emit.
 	// The slice is ordered by index: chunkSizes[0] corresponds to Index 0,
-	// chunkSizes[1] to Index 1, and so on.
+	// chunkSizes[1] to Index 1, and so on. All sizes differ by at most 1 byte.
 	chunkSizes []int64
 
 	// closed indicates whether Close has been called, preventing further
@@ -65,57 +67,65 @@ type EqualSplitChunker struct {
 	closed bool
 }
 
-// NewEqualSplitChunker creates a new EqualSplitChunker that splits a file of
-// the given size into the specified number of roughly equal-sized chunks.
+// NewEqualSplitChunker creates a new EqualSplitChunker that splits a file
+// into chunks with a maximum size, distributing bytes as evenly as possible.
 //
-// totalChunks must be positive. fileSize must be non-negative.
+// maxChunkSize is the maximum allowed size for each chunk in bytes.
+// fileSize must be non-negative.
 //
-// The chunk sizes are calculated upfront: the first (fileSize % totalChunks)
-// chunks will be one byte larger than the remaining chunks. Chunks with a
-// size of zero (which occur when totalChunks > fileSize) are silently
-// omitted, so the number of chunks actually returned may be fewer than
-// totalChunks.
+// The algorithm:
+// 1. Calculates the minimum number of chunks needed: ceil(fileSize / maxChunkSize)
+// 2. Distributes bytes evenly: all chunks differ by at most 1 byte
+// 3. Empty files produce zero chunks
 //
-// Returns ErrInvalidChunkCount if totalChunks is less than or equal to 0.
+// Returns ErrInvalidMaxChunkSize if maxChunkSize is less than or equal to 0.
 // Returns ErrInvalidFileSize if fileSize is negative.
-func NewEqualSplitChunker(totalChunks int, fileSize int64) (*EqualSplitChunker, error) {
-	if totalChunks <= 0 {
-		return nil, ErrInvalidChunkCount
+func NewEqualSplitChunker(maxChunkSize int64, fileSize int64) (*EqualSplitChunker, error) {
+	if maxChunkSize <= 0 {
+		return nil, ErrInvalidMaxChunkSize
 	}
 	if fileSize < 0 {
 		return nil, ErrInvalidFileSize
 	}
 
-	sizes := calculateEqualChunkSizes(totalChunks, fileSize)
+	sizes := calculateEqualChunkSizes(maxChunkSize, fileSize)
+	numChunks := len(sizes)
 
 	return &EqualSplitChunker{
-		totalChunks: totalChunks,
-		chunkIndex:  0,
-		chunkSizes:  sizes,
-		closed:      false,
+		maxChunkSize: maxChunkSize,
+		numChunks:    numChunks,
+		chunkIndex:   0,
+		chunkSizes:   sizes,
+		closed:       false,
 	}, nil
 }
 
-// calculateEqualChunkSizes divides fileSize into at most totalChunks
-// portions as evenly as possible. The first (fileSize % totalChunks) chunks
-// are one byte larger than the rest. Chunks with a size of zero are omitted.
-func calculateEqualChunkSizes(totalChunks int, fileSize int64) []int64 {
+// calculateEqualChunkSizes divides fileSize into chunks where:
+// 1. The number of chunks is the minimum needed to fit all data under maxChunkSize
+// 2. All chunks differ by at most 1 byte (bytes distributed as evenly as possible)
+//
+// This produces balanced chunk sizes, unlike Fixed-Length Chunking which can have
+// one very small remainder chunk.
+func calculateEqualChunkSizes(maxChunkSize int64, fileSize int64) []int64 {
 	if fileSize == 0 {
 		return []int64{}
 	}
 
-	sizes := make([]int64, 0, totalChunks)
-	base := fileSize / int64(totalChunks)
-	remainder := fileSize % int64(totalChunks)
+	// Calculate minimum number of chunks needed
+	numChunks := int((fileSize + maxChunkSize - 1) / maxChunkSize)
 
-	for i := 0; i < totalChunks; i++ {
+	sizes := make([]int64, 0, numChunks)
+	base := fileSize / int64(numChunks)
+	remainder := fileSize % int64(numChunks)
+
+	// First 'remainder' chunks get base + 1, rest get base
+	// This ensures all chunks differ by at most 1 byte
+	for i := 0; i < numChunks; i++ {
 		size := base
 		if i < int(remainder) {
 			size++
 		}
-		if size > 0 {
-			sizes = append(sizes, size)
-		}
+		sizes = append(sizes, size)
 	}
 
 	return sizes
@@ -174,36 +184,39 @@ func (c *EqualSplitChunker) NextChunk(r io.Reader) (*Chunk, error) {
 }
 
 // TotalChunksEstimate returns the number of chunks that a file of the given
-// size would be split into using the current totalChunks configuration.
+// size would be split into using the current maxChunkSize configuration.
 //
 // This recomputes the chunk-size calculation for the provided size, so the
-// result may differ from len(chunkSizes) if the size differs from the file
+// result may differ from numChunks if the size differs from the file
 // size the chunker was originally configured with.
 //
 // For files of zero bytes, the estimate is 0.
 func (c *EqualSplitChunker) TotalChunksEstimate(size int64) int {
-	return len(calculateEqualChunkSizes(c.totalChunks, size))
+	return len(calculateEqualChunkSizes(c.maxChunkSize, size))
 }
 
-// SetTotalChunks reconfigures the target number of chunks and recalculates
-// the chunk boundaries accordingly. The chunkIndex is reset to 0 and the
-// chunker is marked as not closed.
+// SetTotalChunks interprets the 'total' parameter as a new max chunk size
+// (in bytes) for the previously-configured file size. This maintains backward
+// compatibility with the Chunker interface while adapting to the new ESC semantics.
 //
-// Returns ErrInvalidChunkCount if total is less than or equal to 0.
-//
-// Note: SetTotalChunks does not take a fileSize parameter — it only
-// reconfigures the number of chunks. If the file size also needs updating,
-// construct a new EqualSplitChunker via NewEqualSplitChunker.
+// Returns ErrInvalidMaxChunkSize if total is less than or equal to 0.
 func (c *EqualSplitChunker) SetTotalChunks(total int) error {
 	if total <= 0 {
-		return ErrInvalidChunkCount
+		return ErrInvalidMaxChunkSize
 	}
-	c.totalChunks = total
-	c.chunkIndex = 0
-	c.closed = false
-	// Note: chunkSizes is not recalculated here because we don't have a
-	// fileSize. Callers should construct a new EqualSplitChunker with
-	// NewEqualSplitChunker if the file size also changes.
+	// Since we don't store original file size, estimate it from existing chunks
+	if len(c.chunkSizes) > 0 {
+		var totalSize int64
+		for _, s := range c.chunkSizes {
+			totalSize += s
+		}
+		newSizes := calculateEqualChunkSizes(int64(total), totalSize)
+		c.maxChunkSize = int64(total)
+		c.numChunks = len(newSizes)
+		c.chunkSizes = newSizes
+		c.chunkIndex = 0
+		c.closed = false
+	}
 	return nil
 }
 
@@ -212,7 +225,7 @@ func (c *EqualSplitChunker) SetTotalChunks(total int) error {
 // index 0 again and re-emit the pre-calculated chunk sizes from the
 // beginning.
 //
-// The chunk size calculation (and thus totalChunks) is not re-evaluated;
+// The chunk size calculation (and thus maxChunkSize) is not re-evaluated;
 // only the read position is rewound.
 func (c *EqualSplitChunker) Reset() {
 	c.chunkIndex = 0

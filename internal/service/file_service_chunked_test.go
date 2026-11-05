@@ -346,9 +346,9 @@ func TestUploadFileChunked_EqualSplit_RoundTrip(t *testing.T) {
 
 	data := makeTestData(1024)
 	key := "unittest/equal.bin"
-	numChunks := int64(4) // chunkSize param reinterpreted as chunk count
+	maxChunkSize := int64(256) // max chunk size in bytes for equal-split
 
-	if err := fileService.UploadFileChunked(ctx, key, bytes.NewReader(data), true, 4, 2, 3, numChunks, ChunkMethodEqualSplit); err != nil {
+	if err := fileService.UploadFileChunked(ctx, key, bytes.NewReader(data), true, 4, 2, 3, maxChunkSize, ChunkMethodEqualSplit); err != nil {
 		t.Fatalf("UploadFileChunked failed: %v", err)
 	}
 

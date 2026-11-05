@@ -105,8 +105,9 @@ func (s *FileService) UploadFile(ctx context.Context, key string, r io.Reader, q
 //
 // chunkSize is interpreted according to chunkMethod:
 //   - ChunkMethodFixed: chunk size in bytes (each chunk is at most this big).
-//   - ChunkMethodEqualSplit: the target number of chunks (the file is divided
-//     into that many roughly equal parts).
+//   - ChunkMethodEqualSplit: maximum chunk size in bytes (file is divided into
+//     minimum number of chunks so all chunks fit under this size, with bytes
+//     distributed as evenly as possible - max 1 byte difference between chunks).
 //   - ChunkMethodNone: chunkSize is ignored.
 //
 // For chunked uploads each chunk's shards are stored under keys of the form
@@ -267,13 +268,8 @@ func (s *FileService) uploadFileChunked(ctx context.Context, key string, r io.Re
 
 	metadata.TotalChunks = len(metadata.Chunks)
 	// For the "fixed" strategy the configured byte size is the meaningful value;
-	// for "equal-split" chunkSize holds a chunk count, so record the real byte
-	// size of the first emitted chunk instead.
-	if chunkMethod == ChunkMethodEqualSplit {
-		metadata.ChunkSize = metadata.Chunks[0].ChunkSize
-	} else {
-		metadata.ChunkSize = chunkSize
-	}
+	// for "equal-split" chunkSize is the max chunk size, which is also meaningful.
+	metadata.ChunkSize = chunkSize
 
 	log.Debugf("Chunked upload of %d chunks took: %v", metadata.TotalChunks, time.Since(chunkUploadStart))
 
@@ -284,8 +280,8 @@ func (s *FileService) uploadFileChunked(ctx context.Context, key string, r io.Re
 // chunking strategy. For ChunkMethodEqualSplit the reader must be seekable so
 // the total file size can be determined up front.
 //
-// For ChunkMethodEqualSplit, chunkSize is interpreted as the target number of
-// chunks. For ChunkMethodFixed it is the byte size of each chunk.
+// For ChunkMethodEqualSplit, chunkSize is interpreted as the max chunk size
+// in bytes. For ChunkMethodFixed it is the byte size of each chunk.
 func newChunker(chunkMethod string, chunkSize int64, r io.Reader) (chunking.Chunker, error) {
 	switch chunkMethod {
 	case ChunkMethodFixed:
@@ -299,9 +295,9 @@ func newChunker(chunkMethod string, chunkSize int64, r io.Reader) (chunking.Chun
 			return nil, fmt.Errorf("%q chunking requires a seekable reader: %w", ChunkMethodEqualSplit, err)
 		}
 		if chunkSize <= 0 {
-			return nil, fmt.Errorf("chunkSize (number of chunks) must be greater than 0 for %q chunking", ChunkMethodEqualSplit)
+			return nil, fmt.Errorf("chunkSize (max chunk size in bytes) must be greater than 0 for %q chunking", ChunkMethodEqualSplit)
 		}
-		return chunking.NewEqualSplitChunker(int(chunkSize), total)
+		return chunking.NewEqualSplitChunker(chunkSize, total)
 	default:
 		return nil, fmt.Errorf("unsupported chunk method: %q", chunkMethod)
 	}
