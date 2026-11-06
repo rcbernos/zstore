@@ -128,15 +128,19 @@ For large files, use chunking to reduce memory usage during upload:
 # Upload with custom chunk size (default: 16MB)
 ./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=33554432
 
-# Upload with equal-split chunking (divides file evenly across all chunks)
+# Upload with equal-split chunking (balanced chunks with max size limit)
+# ESC divides file into equally-sized chunks, max 1 byte difference between them
 ./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=16777216 --chunk-method=equal-split
 ```
 
 **Chunking options for uploads:**
 - `--chunk-size`: Target size for each chunk in bytes (default: 16777216 = 16MB). When specified, chunking is automatically enabled with `--chunk-method=fixed`.
-- `--chunk-method`: Chunking strategy - `none` (disabled), `fixed` (fixed size chunks, used by default when `--chunk-size` is set), or `equal-split` (evenly distributed chunks)
+- `--chunk-method`: Chunking strategy - `none` (disabled, default), `fixed` (fixed-size chunks up to `--chunk-size`, last chunk may be smaller), or `equal-split` (evenly-sized chunks up to `--chunk-size`, all chunks differ by at most 1 byte)
 
 > **Note:** Chunking reduces memory usage for large files but may result in more API calls for shards.
+
+**Memory Limit Options:**
+- `--memory-limit`: Set memory limit for the operation (e.g., `'512MB'`, `'1GB'`, `'1024KB'`). Useful for preventing out-of-memory errors during large file operations. When set, the runtime enforces the limit before processing begins.
 
 **Upload Raw Files (without erasure coding)**
 ```bash
@@ -179,6 +183,9 @@ For large files that were uploaded with chunking, you can enable chunked downloa
 **Chunked Download Options:**
 - `--chunked`: Enable chunked download for memory-efficient large file downloads (default: true)
 - `--verify-integrity`: Verify shard integrity using CRC64 hashes (default: false)
+
+**Memory Limit Options:**
+- `--memory-limit`: Set memory limit for the operation (e.g., `'512MB'`, `'1GB'`, `'1024KB'`). Useful for preventing out-of-memory errors during large file downloads. When set, the runtime enforces the limit before processing begins.
 
 **Download Raw Files (without erasure coding)**
 ```bash
