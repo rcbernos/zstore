@@ -144,7 +144,29 @@ Upload with equally-sized chunks (max 1 byte difference between them):
 - `--chunk-method`: Chunking strategy: `fixed`, `equal-split`, `none`. Note: reduces memory but may increase API calls.
 
 **Memory Limit Options:**
-- `--memory-limit`: Set memory limit for the operation (e.g., `'512MB'`, `'1GB'`, `'1024KB'`). Useful for preventing out-of-memory errors during large file operations. When set, the runtime enforces the limit before processing begins.
+- `--memory-limit`: Memory limit for the operation (e.g., `512MB`, `1GB`, `1TB`). Implemented using Go's `runtime/debug.SetMemoryLimit()` (Go 1.21+). Prevents OOM errors by setting a soft heap limit. Use with `--chunk-size` for large files.
+#### Usage Examples
+```bash
+ # Limit upload memory to 512MB
+ ./zstore upload large_file.zip zs://bucket/large_file.zip --memory-limit 512MB
+
+ # Limit download memory to 1GB during reconstruction
+ ./zstore download zs://bucket/huge_file.zip /output/huge_file.zip --memory-limit 1GB
+
+# Combine with chunking for maximum memory control
+./zstore upload huge_file.zip zs://bucket/huge_file.zip --chunk-size 32MB --memory-limit 512MB
+ ```
+
+ #### How It Works
+ - **Soft enforcement**: Go's garbage collector triggers more aggressively as memory approaches the limit
+ - **Graceful handling**: Operations slow down rather than crash with OOM
+ - **Concurrency aware**: Works with `--concurrency` to control parallel memory usage
+
+ #### Supported Formats
+ - `512KB` - Kilobytes
+ - `1MB` or `1M` - Megabytes  
+ - `1GB` or `1G` - Gigabytes
+- `1TB` or `1T` - Terabytes
 
 **Upload Raw Files (without erasure coding)**
 ```bash
@@ -189,7 +211,7 @@ For large files that were uploaded with chunking, you can enable chunked downloa
 - `--verify-integrity`: Verify shard integrity using CRC64 hashes (default: false)
 
 **Memory Limit Options:**
-- `--memory-limit`: Set memory limit for the operation (e.g., `'512MB'`, `'1GB'`, `'1024KB'`). Useful for preventing out-of-memory errors during large file downloads. When set, the runtime enforces the limit before processing begins.
+- `--memory-limit`: Memory limit for download operations (e.g., `512MB`, `1GB`). Prevents OOM errors using Go's `runtime/debug.SetMemoryLimit()` (Go 1.21+).
 
 **Download Raw Files (without erasure coding)**
 ```bash
@@ -241,11 +263,13 @@ For large files that were uploaded with chunking, you can enable chunked downloa
 - `--concurrency`: Number of concurrent shard uploads (default: 3)
 - `--chunk-size`: Target chunk size (supports `16MB`, `1GB`, `512KB`). Default: `16MB`. Enables chunking automatically when set.
 - `--chunk-method`: Chunking strategy: `fixed`, `equal-split`, or `none`. Default: `fixed` with `--chunk-size`. Note: reduces memory but may increase API calls.
+ - `--memory-limit`: Memory limit for operation (e.g., `512MB`, `1GB`). Uses Go runtime memory limit. Set to prevent OOM errors on large files.
 
 ### Download Options
 - `--concurrency`: Number of concurrent shard downloads (default: 3)
 - `--verify-integrity`: Enable CRC64 hash verification of downloaded shards (default: false)
 - `--chunked`: Download as chunked if available (default: true)
+ - `--memory-limit`: Memory limit for reconstruction (e.g., `512MB`, `1GB`). Helps prevent OOM during large file downloads.
 
 ### Raw Operations
 - `upload-raw`: Upload files directly to S3/GCS without erasure coding (uses s3:// or gs:// URLs, --region required for S3)
@@ -315,6 +339,7 @@ Zstore automatically distributes shards across all configured buckets using roun
 - **Dynamic concurrency control** for optimal performance
 - **Early termination** when sufficient shards are available
 - **Progress indicators** for large file operations
+- **Memory limit control** via `--memory-limit` flag to prevent OOM errors
 
 ## Testing
 
