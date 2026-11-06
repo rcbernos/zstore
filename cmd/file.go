@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/zzenonn/zstore/internal/config"
 	"github.com/zzenonn/zstore/internal/repository/objectstore"
 )
 
@@ -45,6 +47,22 @@ func parseGCSURL(gsURL string) (string, string, error) {
 		return parts[0], "", nil
 	}
 	return parts[0], parts[1], nil
+}
+
+// applyMemoryLimit parses and sets the memory limit using runtime/debug.SetMemoryLimit.
+// Returns an error if the memory limit format is invalid.
+func applyMemoryLimit(memoryLimit string) error {
+	if memoryLimit == "" {
+		return nil
+	}
+	limitBytes, err := config.ParseMemoryLimit(memoryLimit)
+	if err != nil {
+		return err
+	}
+	if limitBytes > 0 {
+		debug.SetMemoryLimit(limitBytes)
+	}
+	return nil
 }
 
 var uploadCmd = &cobra.Command{
@@ -86,6 +104,14 @@ var uploadCmd = &cobra.Command{
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		chunkSize, _ := cmd.Flags().GetInt64("chunk-size")
 		chunkMethod, _ := cmd.Flags().GetString("chunk-method")
+		memoryLimit, _ := cmd.Flags().GetString("memory-limit")
+
+		// Apply memory limit if set
+		if err := applyMemoryLimit(memoryLimit); err != nil {
+			fmt.Printf("Error setting memory limit: %v\n", err)
+			return
+		}
+
 		err = fileService.UploadFile(context.Background(), key, file, quiet, dataShards, parityShards, concurrency, chunkSize, chunkMethod)
 		if err != nil {
 			fmt.Printf("Error uploading file: %v\n", err)
@@ -182,6 +208,13 @@ var downloadCmd = &cobra.Command{
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		verifyIntegrity, _ := cmd.Flags().GetBool("verify-integrity")
 		chunked, _ := cmd.Flags().GetBool("chunked")
+		memoryLimit, _ := cmd.Flags().GetString("memory-limit")
+
+		// Apply memory limit if set
+		if err := applyMemoryLimit(memoryLimit); err != nil {
+			fmt.Printf("Error setting memory limit: %v\n", err)
+			return
+		}
 
 		// If output path is a directory, use the filename from the key
 		if stat, err := os.Stat(outputPath); err == nil && stat.IsDir() {
@@ -391,12 +424,14 @@ func init() {
 	uploadCmd.Flags().Int("concurrency", 3, "Number of concurrent shard uploads")
 	uploadCmd.Flags().Int64("chunk-size", 16*1024*1024, "Target chunk size in bytes for chunked uploads")
 	uploadCmd.Flags().String("chunk-method", "none", "Chunking method: none, fixed, equal-split")
+	uploadCmd.Flags().String("memory-limit", "", "Memory limit for operation (e.g., '512MB', '1GB')")
 	uploadRawCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")
 	uploadRawCmd.Flags().String("region", "", "AWS region for S3 bucket (required for S3)")
 	downloadCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")
 	downloadCmd.Flags().Int("concurrency", 3, "Number of concurrent shard downloads")
 	downloadCmd.Flags().Bool("verify-integrity", false, "Verify shard integrity using CRC64 hashes")
 	downloadCmd.Flags().Bool("chunked", true, "Download as chunked if available")
+	downloadCmd.Flags().String("memory-limit", "", "Memory limit for operation (e.g., '512MB', '1GB')")
 	downloadRawCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")
 	downloadRawCmd.Flags().String("region", "", "AWS region for S3 bucket (required for S3)")
 	deleteRawCmd.Flags().String("region", "", "AWS region for S3 bucket (required for S3)")
