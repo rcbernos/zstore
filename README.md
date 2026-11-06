@@ -118,26 +118,30 @@ Note: use `source .env` to ensure that your shell is using the correct environme
 
 **Chunked Uploads (for large files)**
 
-For large files, use chunking to reduce memory usage during upload:
+Chunking reduces memory usage by splitting files into smaller pieces that are uploaded independently.
+
+**Fixed Chunking (default for large files)**
+
+Upload with fixed-size chunks where the last chunk may be smaller:
 
 ```bash
-# Upload with chunking enabled (reduces memory footprint)
-# Note: --chunk-size alone enables chunking with default --chunk-method=fixed
-./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=16777216
-
-# Upload with custom chunk size (default: 16MB)
-./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=33554432
-
-# Upload with equal-split chunking (balanced chunks with max size limit)
-# ESC divides file into equally-sized chunks, max 1 byte difference between them
-./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=16777216 --chunk-method=equal-split
+./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=16MB
+./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=32MB
 ```
 
-**Chunking options for uploads:**
-- `--chunk-size`: Target size for each chunk in bytes (default: 16777216 = 16MB). When specified, chunking is automatically enabled with `--chunk-method=fixed`.
-- `--chunk-method`: Chunking strategy - `none` (disabled, default), `fixed` (fixed-size chunks up to `--chunk-size`, last chunk may be smaller), or `equal-split` (evenly-sized chunks up to `--chunk-size`, all chunks differ by at most 1 byte)
+**Equal-Split Chunking (balanced chunks)**
 
-> **Note:** Chunking reduces memory usage for large files but may result in more API calls for shards.
+Upload with equally-sized chunks (max 1 byte difference between them):
+
+```bash
+./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=16MB --chunk-method=equal-split
+./zstore upload /path/to/largefile.zip zs://my-bucket/largefile.zip --chunk-size=32MB --chunk-method=equal-split
+```
+
+**Chunking Options:**
+
+- `--chunk-size`: Target chunk size (supports `16MB`, `1GB`, `512KB`, `2.5GB`). Default: `16MB`. Enables `fixed` chunking method automatically.
+- `--chunk-method`: Chunking strategy: `fixed`, `equal-split`, `none`. Note: reduces memory but may increase API calls.
 
 **Memory Limit Options:**
 - `--memory-limit`: Set memory limit for the operation (e.g., `'512MB'`, `'1GB'`, `'1024KB'`). Useful for preventing out-of-memory errors during large file operations. When set, the runtime enforces the limit before processing begins.
@@ -235,8 +239,8 @@ For large files that were uploaded with chunking, you can enable chunked downloa
 - `--data-shards`: Number of data shards for erasure coding (default: 4)
 - `--parity-shards`: Number of parity shards for erasure coding (default: 2)
 - `--concurrency`: Number of concurrent shard uploads (default: 3)
-- `--chunk-size`: Target chunk size in bytes for chunked uploads (default: 16777216 = 16MB). When specified, enables chunking automatically.
-- `--chunk-method`: Chunking strategy for uploads: `none` (disabled), `fixed` (default when `--chunk-size` is set), `equal-split` (default: none)
+- `--chunk-size`: Target chunk size (supports `16MB`, `1GB`, `512KB`). Default: `16MB`. Enables chunking automatically when set.
+- `--chunk-method`: Chunking strategy: `fixed`, `equal-split`, or `none`. Default: `fixed` with `--chunk-size`. Note: reduces memory but may increase API calls.
 
 ### Download Options
 - `--concurrency`: Number of concurrent shard downloads (default: 3)
