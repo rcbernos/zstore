@@ -22,6 +22,7 @@ func TestParseMemoryLimit(t *testing.T) {
 		{"1T", 1024 * 1024 * 1024 * 1024, false},
 		{"512MB", 512 * 1024 * 1024, false},
 		{"2.5GB", 2*1024*1024*1024 + 512*1024*1024, false},
+		{"16MB", 16 * 1024 * 1024, false},
 		{"invalid", 0, true},
 		{"512XY", 0, true},
 	}

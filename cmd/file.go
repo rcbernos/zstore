@@ -102,7 +102,15 @@ var uploadCmd = &cobra.Command{
 		dataShards, _ := cmd.Flags().GetInt("data-shards")
 		parityShards, _ := cmd.Flags().GetInt("parity-shards")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
-		chunkSize, _ := cmd.Flags().GetInt64("chunk-size")
+		chunkSizeStr, _ := cmd.Flags().GetString("chunk-size")
+		chunkSize, err := config.ParseSize(chunkSizeStr)
+		if err != nil {
+			fmt.Printf("Error parsing chunk size: %v\n", err)
+			return
+		}
+		if chunkSize <= 0 {
+			chunkSize = 16 * 1024 * 1024 // Default to 16MB
+		}
 		chunkMethod, _ := cmd.Flags().GetString("chunk-method")
 		memoryLimit, _ := cmd.Flags().GetString("memory-limit")
 
@@ -422,7 +430,7 @@ func init() {
 	uploadCmd.Flags().Int("data-shards", 4, "Number of data shards for erasure coding")
 	uploadCmd.Flags().Int("parity-shards", 2, "Number of parity shards for erasure coding")
 	uploadCmd.Flags().Int("concurrency", 3, "Number of concurrent shard uploads")
-	uploadCmd.Flags().Int64("chunk-size", 16*1024*1024, "Target chunk size in bytes for chunked uploads")
+	uploadCmd.Flags().String("chunk-size", "16MB", "Target chunk size for chunked uploads (e.g., '16MB', '1GB', '512KB')")
 	uploadCmd.Flags().String("chunk-method", "none", "Chunking method: none, fixed, equal-split")
 	uploadCmd.Flags().String("memory-limit", "", "Memory limit for operation (e.g., '512MB', '1GB')")
 	uploadRawCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress bars")
